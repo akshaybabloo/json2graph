@@ -42,8 +42,18 @@ const GRID_SIZE = 24;
 const GRID_MAJOR = 5;
 /** Fine lines closer together than this on screen are not drawn. */
 const GRID_MIN_PX = 8;
+/** How much of the graph is hidden while the path to the box under the pointer is shown. */
+const FOCUS_VEIL = 0.75;
+/**
+ * The edges of that path are dashed, and the dashes run the way the edges
+ * point: lengths in world pixels, speed in world pixels a second.
+ */
+const FLOW_DASH = 6;
+const FLOW_GAP = 5;
+const FLOW_SPEED = 36;
 
 // Value kinds and key modes, as encoded by the engine (see engine/src/query.rs).
+const NONE = 0xffffffff;
 const KIND_OBJECT = 5;
 const KIND_ARRAY = 6;
 const KEY_NONE = 0;
@@ -71,6 +81,12 @@ let currentLoad = 0;
 let scheduled = false;
 /** Whether the last `cursor` message said the pointer was over an expandable value. */
 let hovering = false;
+/** Where the pointer is over the canvas, in CSS pixels. */
+let pointer: { x: number; y: number } | null = null;
+/** The box that was under the pointer when the last frame was drawn, or `NONE`. */
+let focus = NONE;
+/** Whether the graph may be animated. */
+let motion = true;
 
 const decoder = new TextDecoder();
 /** Decoded keys and values of recently drawn rows, by byte offset. */
@@ -87,6 +103,7 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 		case 'init':
 			ctx = message.canvas.getContext('2d', { alpha: false });
 			theme = message.theme;
+			motion = message.motion;
 			resize(message.width, message.height, message.dpr);
 			break;
 		case 'resize':
@@ -113,6 +130,10 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 		case 'hover':
 			hover(message.x, message.y);
 			break;
+		case 'leave':
+			pointer = null;
+			if (focus !== NONE) requestDraw();
+			break;
 		case 'export':
 			exportImage(message.id, message.options);
 			break;
@@ -137,11 +158,18 @@ function click(x: number, y: number) {
 }
 
 function hover(x: number, y: number) {
+	pointer = { x, y };
+	if (focusAt() !== focus) requestDraw();
 	const expandable =
 		doc !== null && textVisible() && doc.expandable_at(view.x, view.y, view.k, x, y);
 	if (expandable === hovering) return;
 	hovering = expandable;
 	post({ type: 'cursor', expandable });
+}
+
+/** The box under the pointer, or `NONE`. */
+function focusAt(): number {
+	return doc && pointer ? doc.box_at(view.x, view.y, view.k, pointer.x, pointer.y) : NONE;
 }
 
 function resize(width: number, height: number, dpr: number) {
@@ -270,7 +298,25 @@ function charWidth(ctx: OffscreenCanvasRenderingContext2D | null, fontPx: number
 
 function draw() {
 	scheduled = false;
-	if (ctx) render(ctx, size.width, size.height, size.dpr, view);
+	if (!ctx) return;
+	// Found again for every frame: the view can move under a still pointer.
+	focus = focusAt();
+	render(ctx, size.width, size.height, size.dpr, view, {
+		background: theme.background,
+		grid: true,
+		focus
+	});
+	// The path in focus is animated, so it needs a frame after this one.
+	if (focus !== NONE && motion) requestDraw();
+}
+
+/** What a frame shows besides the graph itself. */
+interface Scene {
+	/** A CSS colour. */
+	background: string;
+	grid: boolean;
+	/** The box whose path from the root stands out from a dimmed graph, or `NONE`. */
+	focus: number;
 }
 
 /**
@@ -290,41 +336,64 @@ async function exportImage(id: number, options: ExportOptions) {
 		? new OffscreenCanvas(Math.ceil(width * scale), Math.ceil(height * scale))
 		: new OffscreenCanvas(Math.max(1, size.width * 2), Math.max(1, size.height * 2));
 	const target = canvas.getContext('2d')!;
-	const backdrop = { background: options.background ?? theme.background, grid: options.grid };
+	const scene = {
+		background: options.background ?? theme.background,
+		grid: options.grid,
+		focus: NONE
+	};
 	if (whole) {
 		const offset = EXPORT_MARGIN * scale;
-		render(target, canvas.width, canvas.height, 1, { x: offset, y: offset, k: scale }, backdrop);
+		render(target, canvas.width, canvas.height, 1, { x: offset, y: offset, k: scale }, scene);
 	} else {
-		render(target, size.width, size.height, 2, view, backdrop);
+		render(target, size.width, size.height, 2, view, scene);
 	}
 	post({ type: 'image', id, blob: await canvas.convertToBlob({ type: 'image/png' }) });
 }
 
-/**
- * Draws the graph under `view` on a canvas `width` x `height` CSS pixels in
- * size, over the theme's background and the grid unless `backdrop` says
- * otherwise.
- */
+/** Draws `scene` under `view` on a canvas `width` x `height` CSS pixels in size. */
 function render(
 	ctx: OffscreenCanvasRenderingContext2D,
 	width: number,
 	height: number,
 	dpr: number,
 	view: { x: number; y: number; k: number },
-	backdrop = { background: theme.background, grid: true }
+	scene: Scene
 ) {
 	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	// A transparent background fills nothing, which leaves the new canvas of
 	// an export clear.
-	ctx.fillStyle = backdrop.background;
+	ctx.fillStyle = scene.background;
 	ctx.fillRect(0, 0, width, height);
-	if (backdrop.grid) drawGrid(ctx, width, height, view);
+	if (scene.grid) drawGrid(ctx, width, height, view);
 	if (!doc) return;
 
 	const k = view.k;
-	const fontPx = FONT_SIZE * k;
-	const text = fontPx >= MIN_TEXT_PX;
+	const text = FONT_SIZE * k >= MIN_TEXT_PX;
 	doc.query(view.x, view.y, k, width, height, text);
+	drawFrame(ctx, k, text, false);
+	if (scene.focus === NONE) return;
+
+	// The graph fades behind a veil of the background, and the path to the
+	// box in focus is drawn again over it.
+	ctx.fillStyle = scene.background;
+	ctx.globalAlpha = FOCUS_VEIL;
+	ctx.fillRect(0, 0, width, height);
+	ctx.globalAlpha = 1;
+	doc.query_path(scene.focus, view.x, view.y, k, width, height, text);
+	drawFrame(ctx, k, text, true);
+}
+
+/**
+ * Draws what the last query of the engine found, at scale `k`. With `strong`
+ * its edges and outlines are darker, for the path that stands out.
+ */
+function drawFrame(
+	ctx: OffscreenCanvasRenderingContext2D,
+	k: number,
+	text: boolean,
+	strong: boolean
+) {
+	if (!doc) return;
 	// Views are created after the query: when WebAssembly memory grows, views
 	// created earlier are detached.
 	const buffer = memory.buffer;
@@ -332,16 +401,26 @@ function render(
 	const farEdges = new Float32Array(buffer, doc.far_edges_ptr(), doc.far_edges_len());
 	const slivers = new Float32Array(buffer, doc.slivers_ptr(), doc.slivers_len());
 	const boxes = new Float32Array(buffer, doc.boxes_ptr(), doc.boxes_len());
+	const edgeColour = strong ? theme.key : theme.edge;
 
 	// Edges stop at the base of their arrowhead. The sampled edges to
 	// off-screen children are drawn faintly and without one.
 	const arrow = ARROW * k >= 3 ? ARROW * k : 0;
-	ctx.strokeStyle = theme.edge;
+	ctx.strokeStyle = edgeColour;
 	ctx.lineWidth = Math.min(Math.max(k * 1.25, 0.6), 2.5);
 	ctx.globalAlpha = 0.25;
 	strokeEdges(ctx, farEdges, 0);
 	ctx.globalAlpha = 1;
+	if (strong && motion) {
+		// Never so small that the dashes run together.
+		const scale = Math.max(k, 0.5);
+		const period = (FLOW_DASH + FLOW_GAP) * scale;
+		ctx.setLineDash([FLOW_DASH * scale, FLOW_GAP * scale]);
+		// A falling offset moves the dashes from the start of an edge to its end.
+		ctx.lineDashOffset = -(((performance.now() / 1000) * FLOW_SPEED * scale) % period);
+	}
 	strokeEdges(ctx, edges, arrow);
+	ctx.setLineDash([]);
 
 	if (arrow) {
 		const half = arrow * 0.45;
@@ -354,7 +433,7 @@ function render(
 			ctx.lineTo(tip - arrow, y + half);
 			ctx.closePath();
 		}
-		ctx.fillStyle = theme.edge;
+		ctx.fillStyle = edgeColour;
 		ctx.fill();
 	}
 
@@ -380,15 +459,15 @@ function render(
 	ctx.fillStyle = theme.box;
 	ctx.fill();
 	if (text) {
-		ctx.strokeStyle = theme.border;
+		ctx.strokeStyle = strong ? theme.edge : theme.border;
 		ctx.lineWidth = Math.min(Math.max(k, 0.5), 1.5);
 		ctx.stroke();
-		drawRows(ctx, buffer, fontPx);
+		drawRows(ctx, buffer, FONT_SIZE * k);
 	} else {
 		// Too small to read: a faint outline would disappear, so boxes become
 		// solid blocks that show the shape of the graph.
-		ctx.fillStyle = theme.edge;
-		ctx.globalAlpha = 0.35;
+		ctx.fillStyle = edgeColour;
+		ctx.globalAlpha = strong ? 0.8 : 0.35;
 		ctx.fill();
 		ctx.globalAlpha = 1;
 	}

@@ -95,6 +95,28 @@ test('marks a value that is cut short as expandable', async ({ page }) => {
 	await expect(canvas).toHaveCSS('cursor', 'pointer');
 });
 
+test('dims the graph around the path to the box under the pointer', async ({ page }) => {
+	const canvas = page.locator('canvas');
+	const box = (await canvas.boundingBox())!;
+	// The graph as it is once the first frames have settled.
+	let whole = await canvas.screenshot();
+	await expect
+		.poll(async () => {
+			const last = whole;
+			whole = await canvas.screenshot();
+			return whole.equals(last);
+		})
+		.toBe(true);
+
+	// The root box is at the left of the canvas, half way down.
+	await page.mouse.move(box.x + 100, box.y + box.height / 2);
+	await expect.poll(async () => (await canvas.screenshot()).equals(whole)).toBe(false);
+
+	// Away from every box the graph is whole again.
+	await page.mouse.move(box.x + 10, box.y + 10);
+	await expect.poll(async () => (await canvas.screenshot()).equals(whole)).toBe(true);
+});
+
 test('zooms from the toolbar and exports the graph as a PNG', async ({ page }) => {
 	const scale = () =>
 		page
