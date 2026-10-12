@@ -1,6 +1,8 @@
 /** Colours of the graph canvas. */
 export interface Theme {
 	background: string;
+	/** Lines of the grid behind the graph. */
+	grid: string;
 	box: string;
 	border: string;
 	edge: string;
@@ -23,6 +25,7 @@ export function readTheme(element: Element): Theme {
 	const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
 	return {
 		background: token('--background', '#ffffff'),
+		grid: token('--graph-grid', '#cdd5e1'),
 		box: token('--graph-box', '#ffffff'),
 		border: token('--graph-border', '#e5e5e5'),
 		edge: token('--muted-foreground', '#737373'),
