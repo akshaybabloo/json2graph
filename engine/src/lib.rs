@@ -1,0 +1,230 @@
+//! json2graph engine: indexes a JSON document, lays it out as a graph of
+//! boxes and answers "what is visible in this viewport" for the renderer.
+//!
+//! The JavaScript side writes the source bytes straight into [`Document`]'s
+//! buffer and reads the draw lists back out of WebAssembly memory, so neither
+//! the document nor the graph is ever copied into JavaScript objects.
+
+pub mod layout;
+pub mod parse;
+pub mod query;
+pub mod wrap;
+
+use layout::{Graph, Metrics};
+use parse::Parser;
+use query::{Frame, View};
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub struct Document {
+    source: Vec<u8>,
+    parser: Option<Parser>,
+    graph: Option<Graph>,
+    metrics: Option<Metrics>,
+    frame: Frame,
+}
+
+#[wasm_bindgen]
+impl Document {
+    /// Allocates room for `size` bytes of JSON, to be written at `source_ptr`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(size: usize) -> Document {
+        Document {
+            source: vec![0; size],
+            parser: Some(Parser::new()),
+            graph: None,
+            metrics: None,
+            frame: Frame::default(),
+        }
+    }
+
+    pub fn source_ptr(&self) -> usize {
+        self.source.as_ptr() as usize
+    }
+
+    /// Parses roughly `budget` more bytes. Returns `true` when the document
+    /// is fully indexed.
+    pub fn parse(&mut self, budget: usize) -> Result<bool, JsError> {
+        let Some(parser) = self.parser.as_mut() else {
+            return Ok(true);
+        };
+        match parser.step(&self.source, budget) {
+            Ok(false) => Ok(false),
+            Ok(true) => {
+                let values = self.parser.take().unwrap().finish();
+                self.graph = Some(Graph::new(values));
+                Ok(true)
+            }
+            Err(error) => {
+                let (line, column) = error.line_col(&self.source);
+                Err(JsError::new(&format!(
+                    "{} (line {line}, column {column})",
+                    error.message
+                )))
+            }
+        }
+    }
+
+    pub fn parsed_bytes(&self) -> usize {
+        self.parser
+            .as_ref()
+            .map_or(self.source.len(), Parser::position)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout(
+        &mut self,
+        char_w: f64,
+        row_h: f64,
+        pad_x: f64,
+        pad_y: f64,
+        gap_x: f64,
+        gap_y: f64,
+        max_key: u32,
+        max_val: u32,
+    ) {
+        let metrics = Metrics {
+            char_w,
+            row_h,
+            pad_x,
+            pad_y,
+            gap_x,
+            gap_y,
+            max_key,
+            max_val,
+        };
+        self.graph_mut().layout(&metrics);
+        self.metrics = Some(metrics);
+    }
+
+    pub fn value_count(&self) -> usize {
+        self.graph().values.len()
+    }
+
+    pub fn box_count(&self) -> usize {
+        self.graph().boxes.len()
+    }
+
+    pub fn width(&self) -> f64 {
+        self.graph().size().0
+    }
+
+    pub fn height(&self) -> f64 {
+        self.graph().size().1
+    }
+
+    pub fn root_width(&self) -> f64 {
+        self.graph().boxes[0].w as f64
+    }
+
+    pub fn root_top(&self) -> f64 {
+        let graph = self.graph();
+        graph.box_top(&graph.boxes[0], self.metrics())
+    }
+
+    pub fn root_height(&self) -> f64 {
+        let graph = self.graph();
+        graph.box_height(&graph.boxes[0], self.metrics())
+    }
+
+    /// Fills the draw lists for a viewport `width` x `height` screen pixels
+    /// where screen = world * `k` + (`x`, `y`).
+    pub fn query(&mut self, x: f64, y: f64, k: f64, width: f64, height: f64, text: bool) {
+        let view = View {
+            x,
+            y,
+            k,
+            width,
+            height,
+            text,
+        };
+        let graph = self.graph.as_ref().expect("document is not parsed yet");
+        let metrics = self.metrics.as_ref().expect("document is not laid out yet");
+        query::query(graph, &self.source, metrics, &view, &mut self.frame);
+    }
+
+    /// Whether a click at a screen position, under the view transform
+    /// (`x`, `y`, `k`), would expand or collapse a value.
+    pub fn expandable_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> bool {
+        let (graph, metrics) = (self.graph(), self.metrics());
+        graph
+            .hit(metrics, (screen_x - x) / k, (screen_y - y) / k)
+            .is_some_and(|(id, row)| graph.is_expandable(metrics, id, row))
+    }
+
+    /// Expands the value at a screen position onto wrapped lines, or collapses
+    /// it again. Returns how far down the clicked row moved, in world pixels,
+    /// or NaN if there was nothing to expand there.
+    pub fn toggle_at(&mut self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> f64 {
+        let metrics = *self.metrics();
+        let graph = self.graph.as_mut().expect("document is not parsed yet");
+        let Some((id, row)) = graph.hit(&metrics, (screen_x - x) / k, (screen_y - y) / k) else {
+            return f64::NAN;
+        };
+        graph
+            .toggle(&self.source, &metrics, id, row)
+            .unwrap_or(f64::NAN)
+    }
+
+    pub fn boxes_ptr(&self) -> usize {
+        self.frame.boxes.as_ptr() as usize
+    }
+
+    pub fn boxes_len(&self) -> usize {
+        self.frame.boxes.len()
+    }
+
+    pub fn slivers_ptr(&self) -> usize {
+        self.frame.slivers.as_ptr() as usize
+    }
+
+    pub fn slivers_len(&self) -> usize {
+        self.frame.slivers.len()
+    }
+
+    pub fn edges_ptr(&self) -> usize {
+        self.frame.edges.as_ptr() as usize
+    }
+
+    pub fn edges_len(&self) -> usize {
+        self.frame.edges.len()
+    }
+
+    pub fn far_edges_ptr(&self) -> usize {
+        self.frame.far_edges.as_ptr() as usize
+    }
+
+    pub fn far_edges_len(&self) -> usize {
+        self.frame.far_edges.len()
+    }
+
+    pub fn labels_ptr(&self) -> usize {
+        self.frame.labels.as_ptr() as usize
+    }
+
+    pub fn labels_len(&self) -> usize {
+        self.frame.labels.len()
+    }
+
+    pub fn rows_ptr(&self) -> usize {
+        self.frame.rows.as_ptr() as usize
+    }
+
+    pub fn rows_len(&self) -> usize {
+        self.frame.rows.len()
+    }
+}
+
+impl Document {
+    fn graph(&self) -> &Graph {
+        self.graph.as_ref().expect("document is not parsed yet")
+    }
+
+    fn graph_mut(&mut self) -> &mut Graph {
+        self.graph.as_mut().expect("document is not parsed yet")
+    }
+
+    fn metrics(&self) -> &Metrics {
+        self.metrics.as_ref().expect("document is not laid out yet")
+    }
+}

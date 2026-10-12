@@ -1,0 +1,18 @@
+[package]
+name = "json2graph-engine"
+version = "0.1.0"
+edition = "2024"
+description = "Indexes, lays out and culls JSON documents for the json2graph canvas renderer"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
