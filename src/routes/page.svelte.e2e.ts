@@ -39,6 +39,12 @@ test('shows the sample in the editor and as a graph', async ({ page }) => {
 	await expect(page.locator('.cm-content')).toContainText('"name": "json2graph"');
 });
 
+test('links to the repository on GitHub', async ({ page }) => {
+	const link = page.getByRole('link', { name: 'json2graph on GitHub' });
+	await expect(link).toHaveAttribute('href', 'https://github.com/akshaybabloo/json2graph');
+	await expect(link).toHaveAttribute('target', '_blank');
+});
+
 test('updates the graph when the source is edited', async ({ page }) => {
 	await replaceSource(page, '{"a": {"b": [1, 2]}}');
 	await expect(page.getByText('3 nodes')).toBeVisible();

@@ -9,6 +9,7 @@
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import sample from '#lib/assets/sample.json?raw';
 	import ExportMenu from '#lib/components/export-menu.svelte';
+	import GithubIcon from '#lib/components/github-icon.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
@@ -18,6 +19,7 @@
 
 	/** Larger files are shown as a graph only: a text editor cannot hold them. */
 	const EDITOR_LIMIT = 5 * 1024 * 1024;
+	const REPOSITORY = 'https://github.com/akshaybabloo/json2graph';
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
 	/** Name of a document that was typed rather than opened. */
 	const UNTITLED = 'untitled.json';
@@ -236,6 +238,17 @@
 		>
 			<SunIcon class="dark:hidden" />
 			<MoonIcon class="hidden dark:block" />
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			href={REPOSITORY}
+			target="_blank"
+			rel="noreferrer"
+			aria-label="json2graph on GitHub"
+			title="json2graph on GitHub"
+		>
+			<GithubIcon />
 		</Button>
 	</header>
 
