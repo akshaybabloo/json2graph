@@ -1,0 +1,43 @@
+{
+	"name": "json2graph",
+	"description": "Every object and array is a box. Its rows are its values, and arrows lead to nested boxes.",
+	"version": 1,
+	"stable": false,
+	"license": null,
+	"author": {
+		"name": "Ada Lovelace",
+		"contact": {
+			"email": "ada@example.com",
+			"city": "London"
+		}
+	},
+	"tags": ["json", "graph", "canvas"],
+	"matrix": [
+		[1, 0, 0],
+		[0, 1, 0],
+		[0, 0, 1]
+	],
+	"releases": [
+		{
+			"tag": "v0.1.0",
+			"date": "2026-10-12",
+			"downloads": 1284,
+			"assets": [
+				{ "file": "engine.wasm", "bytes": 33956 },
+				{ "file": "app.js", "bytes": 48210 }
+			]
+		},
+		{
+			"tag": "v0.0.1",
+			"date": "2026-09-30",
+			"downloads": 96,
+			"assets": []
+		}
+	],
+	"settings": {
+		"theme": "auto",
+		"zoom": { "min": 0.01, "max": 4 },
+		"greeting": "h\u00e9llo \u4e16\u754c",
+		"extra": {}
+	}
+}
