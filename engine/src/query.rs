@@ -181,20 +181,76 @@ fn rows(
     }
 }
 
+impl View {
+    /// The viewport in world coordinates: left, top, right, bottom.
+    fn world(&self) -> [f64; 4] {
+        [
+            -self.x / self.k,
+            -self.y / self.k,
+            (self.width - self.x) / self.k,
+            (self.height - self.y) / self.k,
+        ]
+    }
+
+    fn sx(&self, x: f64) -> f32 {
+        (x * self.k + self.x) as f32
+    }
+
+    fn sy(&self, y: f64) -> f32 {
+        (y * self.k + self.y) as f32
+    }
+}
+
+impl Frame {
+    fn clear(&mut self) {
+        self.boxes.clear();
+        self.slivers.clear();
+        self.edges.clear();
+        self.far_edges.clear();
+        self.rows.clear();
+        self.labels.clear();
+    }
+}
+
+/// Appends `b`, whose top edge is at `top`, and its rows, if it is in the
+/// viewport.
+fn draw_box(g: &Graph, src: &[u8], m: &Metrics, v: &View, b: &BoxRec, top: f64, f: &mut Frame) {
+    let [x0, y0, x1, y1] = v.world();
+    let (left, right) = (b.x as f64, b.x as f64 + b.w as f64);
+    let bottom = top + g.box_height(b, m);
+    if left > x1 || right < x0 || top > y1 || bottom < y0 {
+        return;
+    }
+
+    let screen_top = (top * v.k + v.y).max(-CLIP_MARGIN);
+    let screen_bottom = (bottom * v.k + v.y).min(v.height + CLIP_MARGIN);
+    f.boxes.extend([
+        v.sx(left),
+        screen_top as f32,
+        // Never thinner than a pixel, so a box cannot vanish.
+        (b.w as f64 * v.k).max(1.0) as f32,
+        (screen_bottom - screen_top).max(1.0) as f32,
+    ]);
+    if v.text {
+        let rows_top = top + m.pad_y;
+        let visible = ((y0 - rows_top) / m.row_h).floor().max(0.0) as u64
+            ..((y1 - rows_top) / m.row_h).ceil().max(0.0) as u64;
+        let text_left = v.sx(left + m.pad_x).to_bits();
+        let text_right = v.sx(right - m.pad_x).to_bits();
+        let place = |line: u64| {
+            let centre = v.sy(rows_top + (line as f64 + 0.5) * m.row_h);
+            [text_left, centre.to_bits(), text_right]
+        };
+        rows(g, src, m, b, visible, place, f);
+    }
+}
+
 pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
-    f.boxes.clear();
-    f.slivers.clear();
-    f.edges.clear();
-    f.far_edges.clear();
-    f.rows.clear();
-    f.labels.clear();
+    f.clear();
 
     let k = v.k;
-    // The viewport in world coordinates.
-    let (x0, y0) = (-v.x / k, -v.y / k);
-    let (x1, y1) = ((v.width - v.x) / k, (v.height - v.y) / k);
-    let sx = |x: f64| (x * k + v.x) as f32;
-    let sy = |y: f64| (y * k + v.y) as f32;
+    let [x0, y0, x1, y1] = v.world();
+    let (sx, sy) = (|x| v.sx(x), |y| v.sy(y));
     let pixel = 1.0 / k;
 
     let root = &g.boxes[0];
@@ -205,33 +261,9 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
 
     while let Some(id) = f.stack.pop() {
         let b = &g.boxes[id as usize];
-        let (left, right) = (b.x as f64, b.x as f64 + b.w as f64);
+        let right = b.x as f64 + b.w as f64;
         let top = g.box_top(b, m);
-        let bottom = top + g.box_height(b, m);
-
-        if left <= x1 && right >= x0 && top <= y1 && bottom >= y0 {
-            let screen_top = (top * k + v.y).max(-CLIP_MARGIN);
-            let screen_bottom = (bottom * k + v.y).min(v.height + CLIP_MARGIN);
-            f.boxes.extend([
-                sx(left),
-                screen_top as f32,
-                // Never thinner than a pixel, so a box cannot vanish.
-                (b.w as f64 * k).max(1.0) as f32,
-                (screen_bottom - screen_top).max(1.0) as f32,
-            ]);
-            if v.text {
-                let rows_top = top + m.pad_y;
-                let visible = ((y0 - rows_top) / m.row_h).floor().max(0.0) as u64
-                    ..((y1 - rows_top) / m.row_h).ceil().max(0.0) as u64;
-                let text_left = sx(left + m.pad_x).to_bits();
-                let text_right = sx(right - m.pad_x).to_bits();
-                let place = |line: u64| {
-                    let centre = sy(rows_top + (line as f64 + 0.5) * m.row_h);
-                    [text_left, centre.to_bits(), text_right]
-                };
-                rows(g, src, m, b, visible, place, f);
-            }
-        }
+        draw_box(g, src, m, v, b, top, f);
 
         let kids = g.children(b);
         if kids.is_empty() {
@@ -296,5 +328,38 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
                 }
             }
         }
+    }
+}
+
+/// Fills the draw lists with only the path from the root to box `target`:
+/// the boxes on it and the edges between them. Drawn over a dimmed frame, it
+/// shows how the document leads to that box.
+pub fn query_path(g: &Graph, src: &[u8], m: &Metrics, v: &View, target: u32, f: &mut Frame) {
+    f.clear();
+    let [x0, y0, x1, y1] = v.world();
+
+    let Some(mut b) = g.boxes.get(target as usize) else {
+        return;
+    };
+    let mut top = g.box_top(b, m);
+    loop {
+        draw_box(g, src, m, v, b, top, f);
+        if b.parent == NONE {
+            return;
+        }
+        let parent = &g.boxes[b.parent as usize];
+        let parent_top = g.box_top(parent, m);
+
+        // The edge between them, as in `query`. It is drawn even when both of
+        // its ends are off screen, so the path is never interrupted.
+        let line = g.row_line(parent, b.entry - parent.first);
+        let (from_x, to_x) = (parent.x as f64 + parent.w as f64, b.x as f64);
+        let from_y = parent_top + m.pad_y + (line as f64 + 0.5) * m.row_h;
+        let to_y = b.band_top + b.band_h / 2.0;
+        if from_x <= x1 && to_x >= x0 && from_y.min(to_y) <= y1 && from_y.max(to_y) >= y0 {
+            f.edges
+                .extend([v.sx(from_x), v.sy(from_y), v.sx(to_x), v.sy(to_y)]);
+        }
+        (b, top) = (parent, parent_top);
     }
 }

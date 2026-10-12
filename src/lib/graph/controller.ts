@@ -63,7 +63,8 @@ export class GraphController {
 				width: canvas.clientWidth,
 				height: canvas.clientHeight,
 				dpr: devicePixelRatio,
-				theme: readTheme(canvas)
+				theme: readTheme(canvas),
+				motion: !matchMedia('(prefers-reduced-motion: reduce)').matches
 			},
 			[offscreen]
 		);
@@ -104,8 +105,10 @@ export class GraphController {
 		const onMove = (event: PointerEvent) => {
 			this.#post({ type: 'hover', x: event.offsetX, y: event.offsetY });
 		};
+		const onLeave = () => this.#post({ type: 'leave' });
 		canvas.addEventListener('click', onClick);
 		canvas.addEventListener('pointermove', onMove);
+		canvas.addEventListener('pointerleave', onLeave);
 
 		this.#disconnect = () => {
 			themeObserver.disconnect();
@@ -113,6 +116,7 @@ export class GraphController {
 			select(canvas).on('.zoom', null);
 			canvas.removeEventListener('click', onClick);
 			canvas.removeEventListener('pointermove', onMove);
+			canvas.removeEventListener('pointerleave', onLeave);
 		};
 	}
 

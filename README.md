@@ -19,6 +19,7 @@ pnpm dev
 - Edit the JSON on the left: the graph follows once the text is valid again.
 - Open a file with the button, or drop one anywhere on the page. Files over 5 MB are shown as a graph only. Example loads the sample document again, and Clear empties the editor and the graph.
 - Drag to pan, scroll to zoom, or use the buttons over the graph.
+- Hover a box to see how the document leads to it: the boxes and arrows from the root to that box stay as they are, with dashes running along the arrows the way they point, and the rest of the graph dims.
 - Click a value that ends in `…` to expand it onto wrapped lines; click again to collapse it.
 - Export saves a PNG of the whole graph, or of the part on screen when the whole graph would not be readable in one image. Its menu chooses the background (the current one, transparent, or a colour) and whether the grid is kept.
 - The sun/moon button switches between light and dark mode.

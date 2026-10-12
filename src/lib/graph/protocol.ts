@@ -36,6 +36,8 @@ export type ToWorker =
 			height: number;
 			dpr: number;
 			theme: Theme;
+			/** Whether the graph may move by itself: false when the user asks for reduced motion. */
+			motion: boolean;
 	  }
 	| { type: 'resize'; width: number; height: number; dpr: number }
 	| { type: 'theme'; theme: Theme }
@@ -47,6 +49,8 @@ export type ToWorker =
 	/** Pointer events, in CSS pixels from the top left of the canvas. */
 	| { type: 'click'; x: number; y: number }
 	| { type: 'hover'; x: number; y: number }
+	/** The pointer left the canvas. */
+	| { type: 'leave' }
 	| { type: 'export'; id: number; options: ExportOptions };
 
 /** Progress and outcome of the load with the same `id`. */

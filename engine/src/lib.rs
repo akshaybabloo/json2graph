@@ -143,6 +143,40 @@ impl Document {
         query::query(graph, &self.source, metrics, &view, &mut self.frame);
     }
 
+    /// Like [`Document::query`], but for only the path from the root to the
+    /// box `target` (see [`Document::box_at`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_path(
+        &mut self,
+        target: u32,
+        x: f64,
+        y: f64,
+        k: f64,
+        width: f64,
+        height: f64,
+        text: bool,
+    ) {
+        let view = View {
+            x,
+            y,
+            k,
+            width,
+            height,
+            text,
+        };
+        let graph = self.graph.as_ref().expect("document is not parsed yet");
+        let metrics = self.metrics.as_ref().expect("document is not laid out yet");
+        query::query_path(graph, &self.source, metrics, &view, target, &mut self.frame);
+    }
+
+    /// The box at a screen position, under the view transform (`x`, `y`,
+    /// `k`), or `u32::MAX` where there is none.
+    pub fn box_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> u32 {
+        self.graph()
+            .box_at(self.metrics(), (screen_x - x) / k, (screen_y - y) / k)
+            .unwrap_or(parse::NONE)
+    }
+
     /// Whether a click at a screen position, under the view transform
     /// (`x`, `y`, `k`), would expand or collapse a value.
     pub fn expandable_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> bool {

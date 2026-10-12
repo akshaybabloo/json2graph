@@ -241,8 +241,8 @@ impl Graph {
         (self.boxes[0].sub_right as f64, self.boxes[0].band_h)
     }
 
-    /// The box and row at a world position, if there is a row there.
-    pub fn hit(&self, m: &Metrics, x: f64, y: f64) -> Option<(u32, u32)> {
+    /// The box at a world position, if there is one there.
+    pub fn box_at(&self, m: &Metrics, x: f64, y: f64) -> Option<u32> {
         let mut id = 0;
         loop {
             let b = &self.boxes[id as usize];
@@ -250,11 +250,8 @@ impl Graph {
                 return None;
             }
             if x <= b.x as f64 + b.w as f64 {
-                let line = ((y - self.box_top(b, m) - m.pad_y) / m.row_h).floor();
-                if line < 0.0 || line >= self.line_count(b) as f64 {
-                    return None;
-                }
-                return Some((id, self.line_row(b, line as u64)));
+                let top = self.box_top(b, m);
+                return (top <= y && y <= top + self.box_height(b, m)).then_some(id);
             }
             // Further right: the child whose band contains `y`.
             let kids = self.children(b);
@@ -264,6 +261,17 @@ impl Graph {
             }
             id = b.child_first + i as u32;
         }
+    }
+
+    /// The box and row at a world position, if there is a row there.
+    pub fn hit(&self, m: &Metrics, x: f64, y: f64) -> Option<(u32, u32)> {
+        let id = self.box_at(m, x, y)?;
+        let b = &self.boxes[id as usize];
+        let line = ((y - self.box_top(b, m) - m.pad_y) / m.row_h).floor();
+        if line < 0.0 || line >= self.line_count(b) as f64 {
+            return None;
+        }
+        Some((id, self.line_row(b, line as u64)))
     }
 
     /// Whether `row` of box `id` holds a value that is cut short, or one that
