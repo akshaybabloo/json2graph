@@ -56,4 +56,7 @@ pnpm test:engine   # Rust tests, in engine/tests/
 pnpm test:e2e      # Playwright, against a production build
 ```
 
+GitHub Actions runs them, with the Vitest tests, on every pull request and push
+to `main` (`.github/workflows/test.yml`).
+
 `scripts/generate-json.mjs <megabytes> <file>` writes a large test document.

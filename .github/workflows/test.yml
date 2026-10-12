@@ -1,0 +1,53 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Engine (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - run: cargo test --manifest-path engine/Cargo.toml
+
+  app:
+    name: App (Vitest, Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - run: pnpm run build
+
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run test:unit --run
+      - run: pnpm exec playwright test
