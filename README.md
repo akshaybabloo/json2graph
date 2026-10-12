@@ -27,7 +27,8 @@ pnpm dev
 - Click a value that ends in `…` to expand it onto wrapped lines; click again to
   collapse it.
 - Export saves a PNG of the whole graph, or of the part on screen when the whole
-  graph would not be readable in one image.
+  graph would not be readable in one image. Its menu chooses the background
+  (the current one, transparent, or a colour) and whether the grid is kept.
 - The sun/moon button switches between light and dark mode.
 
 ## How it works

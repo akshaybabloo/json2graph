@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
 /** Replaces the whole text of the editor, as a paste would. */
@@ -5,6 +6,26 @@ async function replaceSource(page: Page, text: string) {
 	await page.locator('.cm-content').click();
 	await page.keyboard.press('ControlOrMeta+a');
 	await page.keyboard.insertText(text);
+}
+
+/** Exports with the choices made in the export menu, which must be open. */
+async function exportImage(page: Page) {
+	const download = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Export', exact: true }).click();
+	return download;
+}
+
+/** The top left pixel of an exported image, which is in its margin, as RGBA. */
+async function cornerPixel(page: Page, path: string): Promise<number[]> {
+	const png = (await readFile(path)).toString('base64');
+	return page.evaluate(async (png) => {
+		const image = await createImageBitmap(
+			await (await fetch(`data:image/png;base64,${png}`)).blob()
+		);
+		const context = new OffscreenCanvas(1, 1).getContext('2d')!;
+		context.drawImage(image, 0, 0);
+		return [...context.getImageData(0, 0, 1, 1).data];
+	}, png);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -83,9 +104,25 @@ test('zooms from the toolbar and exports the graph as a PNG', async ({ page }) =
 	await page.getByRole('button', { name: 'Fit to view' }).click();
 	expect(await scale()).toBeCloseTo(fitted);
 
-	const download = page.waitForEvent('download');
 	await page.getByRole('button', { name: 'Export as image' }).click();
-	expect((await download).suggestedFilename()).toBe('sample.png');
+	expect((await exportImage(page)).suggestedFilename()).toBe('sample.png');
+});
+
+test('exports over a transparent or a chosen background, without the grid', async ({ page }) => {
+	const menu = page.getByRole('button', { name: 'Export as image' });
+	await menu.click();
+	await page.getByRole('checkbox', { name: 'Keep grid' }).click();
+	await page.getByRole('radio', { name: 'Transparent' }).click();
+	const transparent = await exportImage(page);
+	expect(await cornerPixel(page, await transparent.path())).toEqual([0, 0, 0, 0]);
+
+	// The menu remembers the last choices, and picking a colour selects it.
+	await menu.click();
+	await expect(page.getByRole('checkbox', { name: 'Keep grid' })).not.toBeChecked();
+	await page.getByLabel('Background colour').fill('#ff0000');
+	await expect(page.getByRole('radio', { name: 'Custom colour' })).toBeChecked();
+	const coloured = await exportImage(page);
+	expect(await cornerPixel(page, await coloured.path())).toEqual([255, 0, 0, 255]);
 });
 
 test('switches to dark mode and remembers it', async ({ page }) => {

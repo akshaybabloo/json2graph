@@ -1,6 +1,6 @@
 import { select } from 'd3-selection';
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom';
-import type { FromWorker, GraphStats, LoadEvent, ToWorker } from './protocol';
+import type { ExportOptions, FromWorker, GraphStats, LoadEvent, ToWorker } from './protocol';
 import { readTheme } from './theme';
 
 /** Space kept around the graph when it is fitted to the canvas. */
@@ -143,11 +143,11 @@ export class GraphController {
 	 * A PNG of the graph: all of it when that fits in a readable image,
 	 * otherwise the part on screen. Null when there is no graph.
 	 */
-	exportImage(): Promise<Blob | null> {
+	exportImage(options: ExportOptions): Promise<Blob | null> {
 		const id = ++this.#exported;
 		return new Promise((resolve) => {
 			this.#exports.set(id, resolve);
-			this.#post({ type: 'export', id });
+			this.#post({ type: 'export', id, options });
 		});
 	}
 

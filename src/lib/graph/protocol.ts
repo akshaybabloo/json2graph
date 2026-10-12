@@ -20,6 +20,14 @@ export interface GraphStats {
 	ms: number;
 }
 
+/** What an exported image shows behind the graph. */
+export interface ExportOptions {
+	/** A CSS colour, `transparent` for none; the background on screen when left out. */
+	background?: string;
+	/** Whether the grid is drawn. */
+	grid: boolean;
+}
+
 export type ToWorker =
 	| {
 			type: 'init';
@@ -39,7 +47,7 @@ export type ToWorker =
 	/** Pointer events, in CSS pixels from the top left of the canvas. */
 	| { type: 'click'; x: number; y: number }
 	| { type: 'hover'; x: number; y: number }
-	| { type: 'export'; id: number };
+	| { type: 'export'; id: number; options: ExportOptions };
 
 /** Progress and outcome of the load with the same `id`. */
 export type LoadEvent =

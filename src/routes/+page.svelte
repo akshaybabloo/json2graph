@@ -2,18 +2,18 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
-	import ImageDownIcon from '@lucide/svelte/icons/image-down';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize';
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import sample from '#lib/assets/sample.json?raw';
+	import ExportMenu from '#lib/components/export-menu.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
 	import { GraphController } from '#lib/graph/controller.js';
-	import type { GraphStats, LoadEvent } from '#lib/graph/protocol.js';
+	import type { ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import { toggleTheme } from '#lib/theme.js';
 
 	/** Larger files are shown as a graph only: a text editor cannot hold them. */
@@ -168,8 +168,8 @@
 	}
 
 	/** Saves the graph as a PNG named after the document. */
-	async function exportImage() {
-		const blob = await controller?.exportImage();
+	async function exportImage(options: ExportOptions) {
+		const blob = await controller?.exportImage(options);
 		if (!blob) return;
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
@@ -181,8 +181,7 @@
 	const tools = [
 		{ label: 'Zoom in', icon: ZoomInIcon, run: () => controller?.zoomBy(ZOOM_STEP) },
 		{ label: 'Zoom out', icon: ZoomOutIcon, run: () => controller?.zoomBy(1 / ZOOM_STEP) },
-		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() },
-		{ label: 'Export as image', icon: ImageDownIcon, run: exportImage }
+		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() }
 	];
 </script>
 
@@ -290,6 +289,7 @@
 							<tool.icon />
 						</Button>
 					{/each}
+					<ExportMenu disabled={!stats} onexport={exportImage} />
 				</div>
 
 				{#if progress}

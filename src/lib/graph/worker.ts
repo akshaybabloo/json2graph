@@ -5,7 +5,7 @@
  */
 import init, { Document } from '#engine';
 import { MONO_FONT } from '../fonts';
-import type { FromWorker, ToWorker } from './protocol';
+import type { ExportOptions, FromWorker, ToWorker } from './protocol';
 import type { Theme } from './theme';
 
 const FONT_SIZE = 12;
@@ -114,7 +114,7 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			hover(message.x, message.y);
 			break;
 		case 'export':
-			exportImage(message.id);
+			exportImage(message.id, message.options);
 			break;
 	}
 });
@@ -277,7 +277,7 @@ function draw() {
  * Renders the graph as a PNG: all of it when it fits in an image that is
  * still readable, otherwise what is on screen, at twice the resolution.
  */
-async function exportImage(id: number) {
+async function exportImage(id: number, options: ExportOptions) {
 	if (!doc) {
 		post({ type: 'image', id, blob: null });
 		return;
@@ -289,28 +289,36 @@ async function exportImage(id: number) {
 	const canvas = whole
 		? new OffscreenCanvas(Math.ceil(width * scale), Math.ceil(height * scale))
 		: new OffscreenCanvas(Math.max(1, size.width * 2), Math.max(1, size.height * 2));
-	const target = canvas.getContext('2d', { alpha: false })!;
+	const target = canvas.getContext('2d')!;
+	const backdrop = { background: options.background ?? theme.background, grid: options.grid };
 	if (whole) {
 		const offset = EXPORT_MARGIN * scale;
-		render(target, canvas.width, canvas.height, 1, { x: offset, y: offset, k: scale });
+		render(target, canvas.width, canvas.height, 1, { x: offset, y: offset, k: scale }, backdrop);
 	} else {
-		render(target, size.width, size.height, 2, view);
+		render(target, size.width, size.height, 2, view, backdrop);
 	}
 	post({ type: 'image', id, blob: await canvas.convertToBlob({ type: 'image/png' }) });
 }
 
-/** Draws the graph under `view` on a canvas `width` x `height` CSS pixels in size. */
+/**
+ * Draws the graph under `view` on a canvas `width` x `height` CSS pixels in
+ * size, over the theme's background and the grid unless `backdrop` says
+ * otherwise.
+ */
 function render(
 	ctx: OffscreenCanvasRenderingContext2D,
 	width: number,
 	height: number,
 	dpr: number,
-	view: { x: number; y: number; k: number }
+	view: { x: number; y: number; k: number },
+	backdrop = { background: theme.background, grid: true }
 ) {
 	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-	ctx.fillStyle = theme.background;
+	// A transparent background fills nothing, which leaves the new canvas of
+	// an export clear.
+	ctx.fillStyle = backdrop.background;
 	ctx.fillRect(0, 0, width, height);
-	drawGrid(ctx, width, height, view);
+	if (backdrop.grid) drawGrid(ctx, width, height, view);
 	if (!doc) return;
 
 	const k = view.k;
