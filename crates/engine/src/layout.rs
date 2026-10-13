@@ -10,6 +10,9 @@
 //!
 //! A row is one line of text, except that a value too long for its row can be
 //! expanded onto as many wrapped lines as it needs.
+//!
+//! A box can be collapsed into its row in the parent. It and its descendants
+//! are then not drawn and take no room, and the boxes around them close up.
 
 use crate::parse::{Kind, NONE, Value};
 use crate::wrap;
@@ -26,6 +29,9 @@ pub struct Metrics {
     pub gap_x: f64,
     /// Vertical distance between sibling bands.
     pub gap_y: f64,
+    /// Width of the control that collapses the box of a value. It sits on the
+    /// right edge of the box, in the row of the value, half in and half out.
+    pub toggle_w: f64,
     /// Property names and values are truncated to this many characters.
     pub max_key: u32,
     pub max_val: u32,
@@ -36,10 +42,11 @@ pub struct Metrics {
 pub struct BoxRec {
     /// Top of the band that holds this box and all of its descendants.
     pub band_top: f64,
+    /// Height of that band: none for a collapsed box.
     pub band_h: f64,
     pub x: f32,
     pub w: f32,
-    /// Right edge of the widest descendant.
+    /// Right edge of the widest descendant that is shown.
     pub sub_right: f32,
     /// The container value this box displays, or `NONE` when the root value
     /// is not a non-empty container and is shown as a single bare row.
@@ -79,6 +86,9 @@ pub struct Graph {
     pub boxes: Vec<BoxRec>,
     /// Expanded values as `(value index, extra lines)`, sorted by index.
     expanded: Vec<(u32, u32)>,
+    /// One bit per box, set for the collapsed ones. Empty until a box is
+    /// collapsed.
+    collapsed: Vec<u64>,
 }
 
 impl Graph {
@@ -111,6 +121,7 @@ impl Graph {
             values,
             boxes: Vec::new(),
             expanded: Vec::new(),
+            collapsed: Vec::new(),
         };
         let mut i = 0;
         while i < boxes.len() {
@@ -255,7 +266,11 @@ impl Graph {
             }
             // Further right: the child whose band contains `y`.
             let kids = self.children(b);
-            let i = kids.partition_point(|c| c.band_top + c.band_h < y);
+            let mut i = kids.partition_point(|c| c.band_top + c.band_h < y);
+            // A collapsed box has an empty band, where the next one starts.
+            while i < kids.len() && self.is_collapsed(b.child_first + i as u32) {
+                i += 1;
+            }
             if i == kids.len() || kids[i].band_top > y {
                 return None;
             }
@@ -308,21 +323,64 @@ impl Graph {
         Some(self.row_top(&self.boxes[id as usize], row, m) - before)
     }
 
+    /// Whether box `id` is collapsed into its row in the parent.
+    pub fn is_collapsed(&self, id: u32) -> bool {
+        let word = self.collapsed.get(id as usize / 64);
+        word.is_some_and(|word| word >> (id % 64) & 1 == 1)
+    }
+
+    /// The box that a click at a world position would collapse or show again:
+    /// the box of the value in the row there, when the position is on the
+    /// control of that row.
+    pub fn collapsible_at(&self, m: &Metrics, x: f64, y: f64) -> Option<u32> {
+        // The control reaches half its width outside the box, so look for the
+        // row from that far to the left.
+        let half = m.toggle_w / 2.0;
+        let (id, row) = self.hit(m, x - half, y)?;
+        let b = &self.boxes[id as usize];
+        let value = &self.values[(b.first + row) as usize];
+        let right = b.x as f64 + b.w as f64;
+        (value.is_container() && value.b > 0 && x >= right - half).then_some(value.a)
+    }
+
+    /// Collapses box `id` into its row in the parent, or shows it again, and
+    /// repositions the boxes. Returns how far down that row moved, or `None`
+    /// for the root, which has no row to collapse into.
+    pub fn toggle_box(&mut self, m: &Metrics, id: u32) -> Option<f64> {
+        let b = &self.boxes[id as usize];
+        if b.parent == NONE {
+            return None;
+        }
+        let parent = b.parent as usize;
+        let row = b.entry - self.boxes[parent].first;
+        let before = self.row_top(&self.boxes[parent], row, m);
+        if self.collapsed.is_empty() {
+            self.collapsed = vec![0; self.boxes.len().div_ceil(64)];
+        }
+        self.collapsed[id as usize / 64] ^= 1 << (id % 64);
+        self.place(m);
+        Some(self.row_top(&self.boxes[parent], row, m) - before)
+    }
+
+    /// Collapses every box into its row, which leaves the root alone on
+    /// screen, or shows every box again, and repositions the boxes. A box
+    /// shown again after all were collapsed still has its own boxes collapsed.
+    pub fn set_all_collapsed(&mut self, m: &Metrics, collapsed: bool) {
+        self.collapsed.clear();
+        if collapsed {
+            self.collapsed
+                .resize(self.boxes.len().div_ceil(64), u64::MAX);
+            // The root has no row to collapse into.
+            self.collapsed[0] &= !1;
+        }
+        self.place(m);
+    }
+
     pub fn layout(&mut self, m: &Metrics) {
         for i in 0..self.boxes.len() {
             self.boxes[i].w = self.box_width(&self.boxes[i], m) as f32;
         }
         self.place(m);
-
-        // Horizontal extent of each subtree, children first.
-        for i in (0..self.boxes.len()).rev() {
-            let b = &self.boxes[i];
-            let right = self
-                .children(b)
-                .iter()
-                .fold(b.x + b.w, |r, kid| r.max(kid.sub_right));
-            self.boxes[i].sub_right = right;
-        }
     }
 
     /// Positions every box from the box widths and line counts.
@@ -332,9 +390,11 @@ impl Graph {
         // Bands, children first so a band can grow to fit its children.
         for i in (0..n).rev() {
             let b = &self.boxes[i];
-            let band_h = self
-                .box_height(b, m)
-                .max(stacked_height(self.children(b), m.gap_y));
+            let band_h = if self.is_collapsed(i as u32) {
+                0.0
+            } else {
+                self.box_height(b, m).max(self.stacked_height(b, m.gap_y))
+            };
             self.boxes[i].band_h = band_h;
         }
 
@@ -344,14 +404,46 @@ impl Graph {
         for i in 0..n {
             let b = &self.boxes[i];
             let (top, band_h, right) = (b.band_top, b.band_h, b.x + b.w);
-            let kids = b.child_first as usize..(b.child_first + b.child_count) as usize;
-            let kids = &mut self.boxes[kids];
-            let mut cursor = top + (band_h - stacked_height(kids, m.gap_y)) / 2.0;
-            for kid in kids {
+            let kids = b.child_first..b.child_first + b.child_count;
+            let mut cursor = top + (band_h - self.stacked_height(b, m.gap_y)) / 2.0;
+            for id in kids {
+                let shown = !self.is_collapsed(id);
+                let kid = &mut self.boxes[id as usize];
                 kid.x = right + m.gap_x as f32;
                 kid.band_top = cursor;
-                cursor += kid.band_h + m.gap_y;
+                if shown {
+                    cursor += kid.band_h + m.gap_y;
+                }
             }
+        }
+
+        // Horizontal extent of each subtree, children first.
+        for i in (0..n).rev() {
+            let b = &self.boxes[i];
+            let mut right = b.x + b.w;
+            for id in b.child_first..b.child_first + b.child_count {
+                if !self.is_collapsed(id) {
+                    right = right.max(self.boxes[id as usize].sub_right);
+                }
+            }
+            self.boxes[i].sub_right = right;
+        }
+    }
+
+    /// Height of the bands of the children of `b` that are shown, stacked
+    /// with `gap` between them.
+    fn stacked_height(&self, b: &BoxRec, gap: f64) -> f64 {
+        let (mut height, mut shown) = (0.0, 0);
+        for id in b.child_first..b.child_first + b.child_count {
+            if !self.is_collapsed(id) {
+                height += self.boxes[id as usize].band_h;
+                shown += 1;
+            }
+        }
+        if shown == 0 {
+            0.0
+        } else {
+            height + gap * (shown - 1) as f64
         }
     }
 
@@ -387,13 +479,6 @@ fn graph_row_count(values: &[Value], b: &BoxRec) -> u32 {
     } else {
         values[b.entry as usize].b
     }
-}
-
-fn stacked_height(kids: &[BoxRec], gap: f64) -> f64 {
-    if kids.is_empty() {
-        return 0.0;
-    }
-    kids.iter().map(|kid| kid.band_h).sum::<f64>() + gap * (kids.len() - 1) as f64
 }
 
 fn digits(n: u32) -> u32 {
