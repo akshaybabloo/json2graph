@@ -26,14 +26,15 @@
 	const EDITOR_LIMIT = 5 * 1024 * 1024;
 	const REPOSITORY = 'https://github.com/akshaybabloo/json2graph';
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
-	/** Name of a document that was typed rather than opened. */
-	const UNTITLED = 'untitled.json';
+	/** What an image of a document that was typed rather than opened is called. */
+	const UNTITLED = 'untitled';
 
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
 	let opened = 0;
 
-	let name = $state(UNTITLED);
+	/** Name of the open file; none for a document that was typed. */
+	let name = $state<string | null>(null);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
 	let engineReady = $state(false);
 	let engineError = $state<string | null>(null);
@@ -61,10 +62,13 @@
 			].join(' · ')
 	);
 
+	/** What is said next to the name of the file: the step under way, or the summary. */
+	const status = $derived(progress ? `${progress.label}…` : summary);
+
 	/** What the graph is, for those who cannot see the canvas. */
 	const graphLabel = $derived(
 		stats
-			? `Graph of ${name}: ${count(stats.boxes, 'node')}, ${count(stats.values, 'value')}`
+			? `Graph${name ? ` of ${name}` : ''}: ${count(stats.boxes, 'node')}, ${count(stats.values, 'value')}`
 			: 'Graph: no document'
 	);
 
@@ -146,7 +150,7 @@
 	function clear() {
 		// Abandon a file that is still being read.
 		opened += 1;
-		name = UNTITLED;
+		name = null;
 		tooLarge = null;
 		editor?.setText('');
 		clearGraph();
@@ -205,7 +209,7 @@
 		if (!blob) return;
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
-		link.download = `${name.replace(/\.json$/i, '')}.png`;
+		link.download = `${name?.replace(/\.json$/i, '') ?? UNTITLED}.png`;
 		link.click();
 		URL.revokeObjectURL(link.href);
 	}
@@ -271,12 +275,11 @@
 			Clear
 		</Button>
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
-			<span class="font-medium text-foreground">{name}</span>
-			{#if progress}
-				· {progress.label}…
-			{:else if summary}
-				· {summary}
+			{#if name}
+				<span class="font-medium text-foreground">{name}</span>
 			{/if}
+			{#if name && status}·{/if}
+			{status}
 		</p>
 		<Button
 			variant="ghost"

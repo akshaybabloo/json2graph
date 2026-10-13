@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
 
 test('starts with no document and says how to open one', async ({ page }) => {
 	await expect(page.getByText(PLACEHOLDER)).toBeVisible();
-	await expect(page.getByText('untitled.json')).toBeVisible();
+	await expect(page.getByText(/untitled/)).toBeHidden();
 	await expect(page.getByText(/loads a sample document/)).toBeVisible();
 	await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
 	await expect(page.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
@@ -49,7 +49,8 @@ test('starts with no document and says how to open one', async ({ page }) => {
 
 test('shows a document typed into the empty page in the middle of the canvas', async ({ page }) => {
 	await replaceSource(page, '{"a": {"b": 1}}');
-	await expect(page.getByText('2 nodes')).toBeVisible();
+	// It has no file, so the summary stands without a name.
+	await expect(page.getByText(/^15 B · 2 nodes/)).toBeVisible();
 
 	// This small graph is a fraction of the canvas, so centred, it starts well
 	// away from the top left corner.
@@ -353,7 +354,7 @@ test.describe('with the example open', () => {
 		await page.getByRole('button', { name: 'Clear' }).click();
 		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
 		await expect(page.getByRole('alert')).toBeHidden();
-		await expect(page.getByText('untitled.json')).toBeVisible();
+		await expect(page.getByText('sample.json')).toBeHidden();
 		await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
 		await expect(page.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
 
