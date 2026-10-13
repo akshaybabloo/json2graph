@@ -59,8 +59,18 @@ export type LoadEvent =
 	| { type: 'ready'; id: number; stats: GraphStats }
 	| { type: 'error'; id: number; message: string };
 
+/**
+ * The WebAssembly engine has loaded, or failed to with `error`. The worker
+ * can show nothing before it has, and nothing at all if it failed.
+ */
+export interface EngineEvent {
+	type: 'engine';
+	error: string | null;
+}
+
 export type FromWorker =
 	| LoadEvent
+	| EngineEvent
 	/**
 	 * A value was expanded or collapsed: the graph has a new size, and the view
 	 * has moved so that the clicked row stays where it was on screen.

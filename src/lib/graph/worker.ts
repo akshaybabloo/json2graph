@@ -70,6 +70,10 @@ let memory: WebAssembly.Memory;
 const engine = init().then((wasm) => {
 	memory = wasm.memory;
 });
+engine.then(
+	() => post({ type: 'engine', error: null }),
+	(error) => post({ type: 'engine', error: describe(error) })
+);
 
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 let size = { width: 0, height: 0, dpr: 1 };
@@ -95,6 +99,10 @@ let valueX = new Float32Array(1024);
 
 function post(message: FromWorker) {
 	postMessage(message);
+}
+
+function describe(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 addEventListener('message', (event: MessageEvent<ToWorker>) => {
@@ -255,7 +263,7 @@ async function load(id: number, data: Blob) {
 	} catch (error) {
 		next?.free();
 		if (id === currentLoad) {
-			post({ type: 'error', id, message: error instanceof Error ? error.message : String(error) });
+			post({ type: 'error', id, message: describe(error) });
 		}
 		return;
 	}

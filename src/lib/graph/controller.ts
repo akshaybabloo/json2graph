@@ -1,6 +1,13 @@
 import { select } from 'd3-selection';
 import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom';
-import type { ExportOptions, FromWorker, GraphStats, LoadEvent, ToWorker } from './protocol';
+import type {
+	EngineEvent,
+	ExportOptions,
+	FromWorker,
+	GraphStats,
+	LoadEvent,
+	ToWorker
+} from './protocol';
 import { readTheme } from './theme';
 
 /** Space kept around the graph when it is fitted to the canvas. */
@@ -30,7 +37,7 @@ export class GraphController {
 	#exported = 0;
 	#disconnect: () => void;
 
-	constructor(canvas: HTMLCanvasElement, onEvent: (event: LoadEvent) => void) {
+	constructor(canvas: HTMLCanvasElement, onEvent: (event: LoadEvent | EngineEvent) => void) {
 		this.#canvas = canvas;
 		this.#worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 		this.#worker.addEventListener('message', (event: MessageEvent<FromWorker>) => {
@@ -48,6 +55,10 @@ export class GraphController {
 			if (message.type === 'image') {
 				this.#exports.get(message.id)?.(message.blob);
 				this.#exports.delete(message.id);
+				return;
+			}
+			if (message.type === 'engine') {
+				onEvent(message);
 				return;
 			}
 			// Ignore anything from a load that has since been replaced.

@@ -1,7 +1,7 @@
 import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { Annotation } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { EditorView, placeholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
 import { MONO_FONT } from '../fonts';
@@ -87,6 +87,7 @@ export class JsonEditor {
 				syntaxHighlighting(highlighting),
 				indentGuides,
 				EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
+				placeholder('Type or paste JSON here'),
 				// Dropped files are opened by the page, not inserted as text.
 				EditorView.domEventHandlers({
 					drop: (event) => Boolean(event.dataTransfer?.files.length)

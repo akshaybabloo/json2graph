@@ -2,6 +2,7 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize';
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import SunIcon from '@lucide/svelte/icons/sun';
@@ -15,7 +16,7 @@
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
-	import type { ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
+	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
 
@@ -30,7 +31,10 @@
 	let editor: JsonEditor | undefined;
 	let opened = 0;
 
-	let name = $state('sample.json');
+	let name = $state(UNTITLED);
+	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
+	let engineReady = $state(false);
+	let engineError = $state<string | null>(null);
 	let stats = $state<GraphStats | null>(null);
 	let progress = $state<{ label: string; fraction: number } | null>(null);
 	let error = $state<string | null>(null);
@@ -75,7 +79,6 @@
 
 	function graph(canvas: HTMLCanvasElement) {
 		controller = new GraphController(canvas, onEvent);
-		controller.load(new Blob([sample]));
 		return () => {
 			controller?.destroy();
 			controller = undefined;
@@ -84,14 +87,18 @@
 
 	function source(parent: HTMLElement) {
 		editor = new JsonEditor(parent, onEdit);
-		editor.setText(sample);
 		return () => {
 			editor?.destroy();
 			editor = undefined;
 		};
 	}
 
-	function onEvent(event: LoadEvent) {
+	function onEvent(event: LoadEvent | EngineEvent) {
+		if (event.type === 'engine') {
+			engineReady = event.error === null;
+			engineError = event.error;
+			return;
+		}
 		if (event.type === 'progress') {
 			progress = { label: LABELS[event.phase], fraction: event.fraction };
 			return;
@@ -145,7 +152,7 @@
 		if (id === opened) editor?.setText(text);
 	}
 
-	/** Opens the document the page starts with. */
+	/** Opens the sample document. */
 	function openExample() {
 		open(new File([sample], 'sample.json', { type: 'application/json' }));
 	}
@@ -293,12 +300,13 @@
 
 			<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
 
-			<Resizable.Pane>
+			<!-- Sized like the other pane: before the page's script runs, a pane has only this to go by. -->
+			<Resizable.Pane defaultSize={72}>
 				<section class="relative h-full" aria-label="Graph">
 					<!--
-					The canvas takes the keys that move the view (see GraphController),
-					which no standard widget does: that is what the application role is for.
-				-->
+						The canvas takes the keys that move the view (see GraphController),
+						which no standard widget does: that is what the application role is for.
+					-->
 					<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 					<canvas
 						{@attach graph}
@@ -341,6 +349,32 @@
 							aria-valuenow={Math.round(progress.fraction * 100)}
 						>
 							<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
+						</div>
+					{/if}
+
+					{#if engineError !== null}
+						<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
+							<p class="max-w-sm text-destructive" role="alert">
+								The graph engine could not be loaded, so no graph can be drawn: {engineError}.
+								Reload the page to try again.
+							</p>
+						</div>
+					{:else if !engineReady}
+						<p
+							class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
+							role="status"
+						>
+							<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+							Loading the graph engine…
+						</p>
+					{:else if !stats && !progress && !error && tooLarge === null}
+						<div
+							class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
+						>
+							<p class="max-w-xs text-muted-foreground">
+								Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+								<span class="font-medium text-foreground">Example</span> loads a sample document.
+							</p>
 						</div>
 					{/if}
 
