@@ -9,9 +9,9 @@ import type { ExportOptions, FromWorker, ToWorker } from './protocol';
 import type { Theme } from './theme';
 
 const FONT_SIZE = 12;
-const ROW_HEIGHT = 20;
+const ROW_HEIGHT = 24;
 const PAD_X = 12;
-const PAD_Y = 8;
+const PAD_Y = 0;
 const GAP_X = 72;
 const GAP_Y = 20;
 const RADIUS = 6;
