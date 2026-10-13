@@ -1,0 +1,80 @@
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    name: Preview on Cloudflare
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm run build
+
+      - id: preview
+        run: |
+          pnpm exec wrangler preview --name "pr-$PR"
+          jq -er 'select(.type == "preview") | .preview_urls[0] // empty | "url=\(.)"' "$WRANGLER_OUTPUT_FILE_PATH" >> "$GITHUB_OUTPUT"
+        env:
+          PR: ${{ github.event.number }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler.ndjson
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - run: |
+          .github/scripts/preview-comment.sh "$PR" "**Preview:** $URL
+
+          Built from ${SHA::7} on $(date -u '+%-d %B %Y at %H:%M UTC'). It is rebuilt on every push and removed when the pull request is closed."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          URL: ${{ steps.preview.outputs.url }}
+
+  remove:
+    name: Remove the preview
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec wrangler preview delete --name "pr-$PR" --skip-confirmation
+        env:
+          PR: ${{ github.event.number }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - run: .github/scripts/preview-comment.sh "$PR" "**Preview removed.** It was deleted when this pull request was closed."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.number }}
