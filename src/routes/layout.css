@@ -148,6 +148,15 @@
 	--graph-grid: oklch(0.27 0.02 250);
 }
 
+/* The nodes of the logo and the "2" of the name. */
+:root {
+	--brand: #2457d6;
+}
+
+.dark {
+	--brand: #7ea6ff;
+}
+
 /* Colours of JSON values, shared by the editor and the graph canvas. */
 :root {
 	--json-string: #15803d;
