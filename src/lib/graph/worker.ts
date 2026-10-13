@@ -52,7 +52,7 @@ const FLOW_DASH = 6;
 const FLOW_GAP = 5;
 const FLOW_SPEED = 36;
 
-// Value kinds and key modes, as encoded by the engine (see engine/src/query.rs).
+// Value kinds and key modes, as encoded by the engine (see crates/engine/src/query.rs).
 const NONE = 0xffffffff;
 const KIND_OBJECT = 5;
 const KIND_ARRAY = 6;

@@ -1,0 +1,17 @@
+[package]
+name = "json2graph-formatter"
+version = "0.1.0"
+edition = "2024"
+description = "Formats JSON for the json2graph editor, with Biome's formatter"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+# Biome's crates are no longer published to crates.io, so they come from a
+# release tag of its repository.
+biome_formatter = { git = "https://github.com/biomejs/biome.git", tag = "@biomejs/biome@2.5.15" }
+biome_json_formatter = { git = "https://github.com/biomejs/biome.git", tag = "@biomejs/biome@2.5.15" }
+biome_json_parser = { git = "https://github.com/biomejs/biome.git", tag = "@biomejs/biome@2.5.15" }

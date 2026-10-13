@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"wasm": "wasm-pack build engine --target web --release --no-pack --out-name engine",
+		"wasm": "wasm-pack build crates/engine --target web --release --no-pack --out-name engine && wasm-pack build crates/formatter --target web --release --no-pack --out-name formatter",
 		"build": "pnpm run wasm && vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
@@ -14,7 +14,7 @@
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"test:unit": "vitest",
-		"test:engine": "cargo test --manifest-path engine/Cargo.toml",
+		"test:engine": "cargo test --workspace",
 		"test": "pnpm run test:engine && pnpm run test:unit --run && pnpm run test:e2e",
 		"test:e2e": "playwright install && playwright test"
 	},
@@ -66,7 +66,8 @@
 		"vitest-browser-svelte": "^3.0.0"
 	},
 	"imports": {
-		"#engine": "./engine/pkg/engine.js",
+		"#engine": "./crates/engine/pkg/engine.js",
+		"#formatter": "./crates/formatter/pkg/formatter.js",
 		"#lib": "./src/lib/index.js",
 		"#lib/*": "./src/lib/*"
 	}

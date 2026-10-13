@@ -17,10 +17,10 @@ export default defineConfig({
 			adapter: adapter()
 		})
 	],
-	// The graph worker imports the WebAssembly engine as an ES module.
+	// The workers import their WebAssembly packages as ES modules.
 	worker: { format: 'es' },
-	// The engine's .wasm file is fetched from outside `src`.
-	server: { fs: { allow: ['engine/pkg'] } },
+	// Their .wasm files are fetched from outside `src`.
+	server: { fs: { allow: ['crates/engine/pkg', 'crates/formatter/pkg'] } },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

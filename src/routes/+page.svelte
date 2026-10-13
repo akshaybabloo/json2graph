@@ -2,6 +2,7 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import ListIndentIncreaseIcon from '@lucide/svelte/icons/list-indent-increase';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize';
 	import MoonIcon from '@lucide/svelte/icons/moon';
@@ -15,6 +16,7 @@
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
+	import { formatJson } from '#lib/format/format.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import { SITE } from '#lib/site.js';
@@ -86,7 +88,7 @@
 	}
 
 	function source(parent: HTMLElement) {
-		editor = new JsonEditor(parent, onEdit);
+		editor = new JsonEditor(parent, onEdit, format);
 		return () => {
 			editor?.destroy();
 			editor = undefined;
@@ -116,6 +118,20 @@
 	function onEdit(text: string) {
 		if (text.trim() === '') clearGraph();
 		else controller?.load(new Blob([text]), { keepView: true });
+	}
+
+	/** Re-indents the document in the editor. Text that is not JSON is left as it is. */
+	async function format() {
+		const text = editor?.text ?? '';
+		if (text.trim() === '') return;
+		try {
+			const formatted = await formatJson(text);
+			// Not over what was typed in the meantime.
+			if (editor?.text === text) editor.replace(formatted);
+		} catch (reason) {
+			// The error of the graph, if it is on screen, says where the mistake is.
+			error ??= `Cannot format: ${reason instanceof Error ? reason.message : reason}`;
+		}
 	}
 
 	/** Removes the graph: an empty document has none, and is not an error. */
@@ -239,6 +255,16 @@
 		<Button variant="outline" size="sm" onclick={openExample}>
 			<FileBracesIcon />
 			Example
+		</Button>
+		<Button
+			variant="outline"
+			size="sm"
+			disabled={tooLarge !== null}
+			title="Format the JSON (Shift+Alt+F in the editor)"
+			onclick={format}
+		>
+			<ListIndentIncreaseIcon />
+			Format
 		</Button>
 		<Button variant="outline" size="sm" onclick={clear}>
 			<EraserIcon />

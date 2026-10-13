@@ -8,9 +8,8 @@ node_modules
 /.svelte-kit
 /build
 
-# WebAssembly engine: Rust build output and the generated package
-/engine/target
-/engine/pkg
+# WebAssembly: the generated packages (Cargo's own output is under `target`)
+/crates/*/pkg
 
 # OS
 .DS_Store

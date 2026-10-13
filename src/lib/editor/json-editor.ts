@@ -1,7 +1,7 @@
 import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { Annotation } from '@codemirror/state';
-import { EditorView, placeholder } from '@codemirror/view';
+import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
 import { MONO_FONT } from '../fonts';
@@ -77,7 +77,8 @@ export class JsonEditor {
 	#view: EditorView;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 
-	constructor(parent: HTMLElement, onEdit: (text: string) => void) {
+	/** `onFormat` is called when the keys that format a document are pressed. */
+	constructor(parent: HTMLElement, onEdit: (text: string) => void, onFormat: () => void) {
 		this.#view = new EditorView({
 			parent,
 			extensions: [
@@ -88,6 +89,7 @@ export class JsonEditor {
 				indentGuides,
 				EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
 				placeholder('Type or paste JSON here'),
+				keymap.of([{ key: 'Shift-Alt-f', run: () => (onFormat(), true) }]),
 				// Dropped files are opened by the page, not inserted as text.
 				EditorView.domEventHandlers({
 					drop: (event) => Boolean(event.dataTransfer?.files.length)
@@ -109,6 +111,20 @@ export class JsonEditor {
 			changes: { from: 0, to: this.#view.state.doc.length, insert: text },
 			annotations: external.of(true)
 		});
+	}
+
+	get text(): string {
+		return this.#view.state.doc.toString();
+	}
+
+	/**
+	 * Replaces the document as an edit: it is reported once typing pauses, and
+	 * can be undone.
+	 */
+	replace(text: string) {
+		const { doc } = this.#view.state;
+		if (doc.toString() === text) return;
+		this.#view.dispatch({ changes: { from: 0, to: doc.length, insert: text } });
 	}
 
 	destroy() {

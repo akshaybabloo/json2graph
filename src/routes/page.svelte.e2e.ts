@@ -65,6 +65,44 @@ test('shows a document typed into the empty page in the middle of the canvas', a
 	expect(view.y).toBeGreaterThan(height / 4);
 });
 
+test('formats the document without changing its values', async ({ page }) => {
+	const source = '{\n"big":12345678901234567890,"list":[1.0,{}]}';
+	await replaceSource(page, source);
+	await expect(page.getByText('2 nodes')).toBeVisible();
+	await expect(page.getByText('45 B')).toBeVisible();
+
+	// What fits on a line stays on one; the number is too large to survive
+	// being read as a number, and is still as it was written.
+	await page.getByRole('button', { name: 'Format' }).click();
+	await expect(page.locator('.cm-line')).toHaveText([
+		'{',
+		'  "big": 12345678901234567890,',
+		'  "list": [1.0, {}]',
+		'}',
+		''
+	]);
+	// The graph is of the formatted text: the same nodes, in a larger document.
+	await expect(page.getByText('55 B')).toBeVisible();
+	await expect(page.getByText('2 nodes')).toBeVisible();
+
+	// It is an edit, so it can be undone.
+	await page.locator('.cm-content').click();
+	await page.keyboard.press('ControlOrMeta+z');
+	await expect(page.locator('.cm-line')).toHaveText([
+		'{',
+		'"big":12345678901234567890,"list":[1.0,{}]}'
+	]);
+});
+
+test('leaves text that is not JSON as it is when asked to format it', async ({ page }) => {
+	await replaceSource(page, '{"a": 1,}');
+	await expect(page.getByRole('alert')).toContainText('line 1');
+
+	await page.getByRole('button', { name: 'Format' }).click();
+	await expect(page.locator('.cm-line')).toHaveText(['{"a": 1,}']);
+	await expect(page.getByRole('alert')).toContainText('line 1');
+});
+
 test('shows that the engine is loading until it has loaded', async ({ page }) => {
 	let release!: () => void;
 	const held = new Promise<void>((resolve) => (release = resolve));
