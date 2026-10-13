@@ -10,6 +10,7 @@
 	import sample from '#lib/assets/sample.json?raw';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
+	import Logo from '#lib/components/logo.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
@@ -202,7 +203,10 @@
 
 <div class="flex h-dvh flex-col">
 	<header class="flex items-center gap-2 border-b px-4 py-2 text-sm">
-		<h1 class="mr-2 font-semibold">json2graph</h1>
+		<h1 class="mr-2 flex items-center gap-1.5 font-semibold">
+			<Logo class="size-6" />
+			<span>json<span class="text-(--brand)">2</span>graph</span>
+		</h1>
 		<label
 			class={[
 				buttonVariants({ variant: 'outline', size: 'sm' }),
