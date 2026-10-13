@@ -47,3 +47,6 @@ rustc-ice-*.txt
 
 .claude/
 .idea/
+
+.dev.vars*
+!.dev.vars.example
