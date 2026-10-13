@@ -20,6 +20,7 @@ pnpm dev
 - Open a file with the button, or drop one anywhere on the page. Files over 100 MB are shown as a graph only. Example loads a sample document, and Clear empties the editor and the graph.
 - Drag to pan, scroll to zoom, or use the buttons over the graph. With the keyboard, once the graph has focus: the arrow keys pan, `+` and `-` zoom, and `0` fits the graph.
 - Hover a box to see how the document leads to it: the boxes and arrows from the root to that box stay as they are, with dashes running along the arrows the way they point, and the rest of the graph dims.
+- Click the − on the edge of a node, where an arrow leaves it, to collapse the node the arrow leads to, with everything beyond it, into that row; click the + to show it again. The buttons over the graph collapse every node, which leaves the root, or expand them all.
 - Click a value that ends in `…` to expand it onto wrapped lines; click again to collapse it.
 - Export saves a PNG of the whole graph, or of the part on screen when the whole graph would not be readable in one image. Its menu chooses the background (the current one, transparent, or a colour) and whether the grid is kept.
 - The sun/moon button switches between light and dark mode.
