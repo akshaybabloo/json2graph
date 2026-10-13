@@ -14,6 +14,13 @@ const PAD_X = 12;
 const PAD_Y = 0;
 const GAP_X = 72;
 const GAP_Y = 20;
+/**
+ * The control that collapses the box of a value: a square on the right edge
+ * of the row, where the edge to that box leaves. It can be clicked a little
+ * way around what is drawn.
+ */
+const TOGGLE_SIZE = 12;
+const TOGGLE_HIT = 18;
 const RADIUS = 6;
 const ARROW = 7;
 const MAX_KEY_CHARS = 32;
@@ -65,6 +72,7 @@ const ROW_WRAPPED = 1 << 16;
 const ROW_CONTINUED = 1 << 17;
 const ROW_MORE = 1 << 18;
 const ROW_FIRST = 1 << 19;
+const ROW_COLLAPSED = 1 << 20;
 
 let memory: WebAssembly.Memory;
 const engine = init().then((wasm) => {
@@ -135,6 +143,9 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 		case 'click':
 			click(message.x, message.y);
 			break;
+		case 'collapse':
+			collapseAll(message.collapsed);
+			break;
 		case 'hover':
 			hover(message.x, message.y);
 			break;
@@ -158,10 +169,30 @@ function click(x: number, y: number) {
 	if (!doc || !textVisible()) return;
 	const moved = doc.toggle_at(view.x, view.y, view.k, x, y);
 	if (Number.isNaN(moved)) return;
-	strings.clear();
 	// The boxes have been repositioned: keep the clicked row where it was.
 	view = { ...view, y: view.y - moved * view.k };
-	post({ type: 'layout', ...view, width: doc.width(), height: doc.height() });
+	relaid(false);
+}
+
+function collapseAll(collapsed: boolean) {
+	if (!doc) return;
+	doc.collapse_all(collapsed);
+	relaid(true);
+}
+
+/** Tells the page about the new layout of the document, and draws it. */
+function relaid(home: boolean) {
+	if (!doc) return;
+	strings.clear();
+	post({
+		type: 'layout',
+		...view,
+		width: doc.width(),
+		height: doc.height(),
+		rootTop: doc.root_top(),
+		rootHeight: doc.root_height(),
+		home
+	});
 	requestDraw();
 }
 
@@ -175,9 +206,16 @@ function hover(x: number, y: number) {
 	post({ type: 'cursor', expandable });
 }
 
-/** The box under the pointer, or `NONE`. */
+/**
+ * The box under the pointer, or `NONE`. The control on the edge of a box is
+ * not part of it: half of it lies outside, and the box it shows would
+ * otherwise appear dimmed.
+ */
 function focusAt(): number {
-	return doc && pointer ? doc.box_at(view.x, view.y, view.k, pointer.x, pointer.y) : NONE;
+	if (!doc || !pointer) return NONE;
+	const { x, y } = pointer;
+	if (textVisible() && doc.collapsible_at(view.x, view.y, view.k, x, y)) return NONE;
+	return doc.box_at(view.x, view.y, view.k, x, y);
 }
 
 function resize(width: number, height: number, dpr: number) {
@@ -257,6 +295,7 @@ async function load(id: number, data: Blob) {
 			PAD_Y,
 			GAP_X,
 			GAP_Y,
+			TOGGLE_HIT,
 			MAX_KEY_CHARS,
 			MAX_VALUE_CHARS
 		);
@@ -615,6 +654,34 @@ function drawRows(ctx: OffscreenCanvasRenderingContext2D, buffer: ArrayBuffer, f
 		if (next !== colour) ctx.fillStyle = colour = next;
 		ctx.fillText(value, x, floats[i + 1], room);
 	}
+
+	// The control of a row whose value has a box, on the edge of the box where
+	// the edge to that box leaves: a minus while the box is shown, and a plus
+	// once it is collapsed into the row.
+	const side = TOGGLE_SIZE * k;
+	const arm = side / 4;
+	const squares = new Path2D();
+	const signs = new Path2D();
+	for (let i = 0; i < length; i += ROW_WORDS) {
+		const flags = words[i + 3];
+		const kind = flags & 0xff;
+		if ((kind !== KIND_OBJECT && kind !== KIND_ARRAY) || words[i + 6] === 0) continue;
+		const x = floats[i + 2] + pad;
+		const y = floats[i + 1];
+		squares.roundRect(x - side / 2, y - side / 2, side, side, side / 4);
+		signs.moveTo(x - arm, y);
+		signs.lineTo(x + arm, y);
+		if (flags & ROW_COLLAPSED) {
+			signs.moveTo(x, y - arm);
+			signs.lineTo(x, y + arm);
+		}
+	}
+	ctx.fillStyle = theme.box;
+	ctx.fill(squares);
+	ctx.strokeStyle = theme.edge;
+	ctx.lineWidth = Math.min(Math.max(k, 0.75), 1.5);
+	ctx.stroke(squares);
+	ctx.stroke(signs);
 }
 
 /** Theme colour of a value, by kind. */

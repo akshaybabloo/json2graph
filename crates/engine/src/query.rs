@@ -49,6 +49,8 @@ pub const ROW_CONTINUED: u32 = 1 << 17;
 pub const ROW_MORE: u32 = 1 << 18;
 /// The first line of the first row of a box.
 pub const ROW_FIRST: u32 = 1 << 19;
+/// The box of the value in this row is collapsed into the row.
+pub const ROW_COLLAPSED: u32 = 1 << 20;
 
 /// Screen = world * `k` + (`x`, `y`).
 #[derive(Clone, Copy, Debug)]
@@ -152,7 +154,9 @@ fn rows(
             } else {
                 (value.a, value.b)
             };
-            emit(plain, at, 0, text);
+            // A container that is not empty has a box, whose id is in `a`.
+            let collapsed = value.is_container() && value.b > 0 && g.is_collapsed(value.a);
+            emit(plain, at, if collapsed { ROW_COLLAPSED } else { 0 }, text);
         }
         let Some(&(_, extra)) = expansion else { break };
 
@@ -290,6 +294,11 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
         let end = kids.partition_point(|c| c.band_top <= y1);
         let mut i = start;
         while i < end {
+            if g.is_collapsed(b.child_first + i as u32) {
+                // However many are collapsed here, in one step.
+                i = g.shown_from(b, i);
+                continue;
+            }
             let c = &kids[i];
             if gap_visible {
                 f.edges.extend(edge(c));
@@ -323,8 +332,10 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
             let below = end + kids[end..].partition_point(|c| source_y(c).min(target_y(c)) <= y1);
             for run in [above..start, end..below] {
                 let stride = run.len().div_ceil(MAX_FAN).max(1);
-                for c in kids[run].iter().step_by(stride) {
-                    f.far_edges.extend(edge(c));
+                for i in run.step_by(stride) {
+                    if !g.is_collapsed(b.child_first + i as u32) {
+                        f.far_edges.extend(edge(&kids[i]));
+                    }
                 }
             }
         }

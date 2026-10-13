@@ -28,6 +28,24 @@ async function cornerPixel(page: Page, path: string): Promise<number[]> {
 	}, png);
 }
 
+/**
+ * A picture of the graph once it has stopped changing, without the toolbar and
+ * the hint that lie over the corners of the canvas.
+ */
+async function graphShot(page: Page): Promise<Buffer> {
+	const box = (await page.locator('canvas').boundingBox())!;
+	const clip = { x: box.x, y: box.y, width: box.width - 80, height: box.height - 48 };
+	let shot = await page.screenshot({ clip });
+	await expect
+		.poll(async () => {
+			const last = shot;
+			shot = await page.screenshot({ clip });
+			return shot.equals(last);
+		})
+		.toBe(true);
+	return shot;
+}
+
 /** What the editor shows while it is empty. */
 const PLACEHOLDER = 'Type or paste JSON here';
 
@@ -153,6 +171,53 @@ test('shows a file too large for the editor as a graph only, with nothing to for
 	await clear.click();
 	await expect(page.getByText(/too large to edit as text/)).toBeHidden();
 	await expect(clear).toBeDisabled();
+});
+
+test('collapses a node into its row, and shows it again', async ({ page }) => {
+	// Two boxes of the same width, so the graph is centred on the gap between
+	// them: the control of the root's row is half that gap left of the middle.
+	await replaceSource(page, '{"a": {"b": 123}}');
+	await expect(page.getByText('2 nodes')).toBeVisible();
+	const canvas = page.locator('canvas');
+	const box = (await canvas.boundingBox())!;
+	const control = { x: box.x + box.width / 2 - 36, y: box.y + box.height / 2 };
+	const away = () => page.mouse.move(box.x + 10, box.y + 10);
+	await away();
+	const whole = await graphShot(page);
+
+	// The pointer on the control is not on the box: nothing is dimmed.
+	await page.mouse.move(control.x, control.y);
+	await expect(canvas).toHaveCSS('cursor', 'pointer');
+	expect((await graphShot(page)).equals(whole)).toBe(true);
+	await page.mouse.click(control.x, control.y);
+	expect((await graphShot(page)).equals(whole)).toBe(false);
+
+	// The row has not moved, and its control brings the node back, as bright
+	// as the rest.
+	await page.mouse.click(control.x, control.y);
+	expect((await graphShot(page)).equals(whole)).toBe(true);
+});
+
+test('collapses every node into the root, and expands them all again', async ({ page }) => {
+	await replaceSource(page, '{"a": {"b": {"c": 1}}, "d": [1, 2]}');
+	await expect(page.getByText('4 nodes')).toBeVisible();
+	const box = (await page.locator('canvas').boundingBox())!;
+	const away = () => page.mouse.move(box.x + 10, box.y + 10);
+	await away();
+	const whole = await graphShot(page);
+
+	await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+	await away();
+	const root = await graphShot(page);
+	expect(root.equals(whole)).toBe(false);
+
+	// A second time changes nothing, and expanding gives the first graph back.
+	await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+	await away();
+	expect((await graphShot(page)).equals(root)).toBe(true);
+	await page.getByRole('button', { name: 'Expand all nodes' }).click();
+	await away();
+	expect((await graphShot(page)).equals(whole)).toBe(true);
 });
 
 test('undoes formatting without undoing what was typed just before it', async ({ page }) => {

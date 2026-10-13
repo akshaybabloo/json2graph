@@ -48,6 +48,8 @@ export type ToWorker =
 	| { type: 'clear'; id: number }
 	/** Pointer events, in CSS pixels from the top left of the canvas. */
 	| { type: 'click'; x: number; y: number }
+	/** Collapses every box into its row, leaving the root, or shows every box again. */
+	| { type: 'collapse'; collapsed: boolean }
 	| { type: 'hover'; x: number; y: number }
 	/** The pointer left the canvas. */
 	| { type: 'leave' }
@@ -72,11 +74,23 @@ export type FromWorker =
 	| LoadEvent
 	| EngineEvent
 	/**
-	 * A value was expanded or collapsed: the graph has a new size, and the view
-	 * has moved so that the clicked row stays where it was on screen.
+	 * A value was expanded or a box collapsed, or the reverse: the graph has a
+	 * new size, and the view has moved so that the clicked row stays where it
+	 * was on screen. After every box was collapsed or shown at once there is no
+	 * such row, and `home` asks for the starting view instead.
 	 */
-	| { type: 'layout'; x: number; y: number; k: number; width: number; height: number }
-	/** Whether the pointer is over a value that a click expands or collapses. */
+	| {
+			type: 'layout';
+			x: number;
+			y: number;
+			k: number;
+			width: number;
+			height: number;
+			rootTop: number;
+			rootHeight: number;
+			home: boolean;
+	  }
+	/** Whether the pointer is over something that a click expands or collapses. */
 	| { type: 'cursor'; expandable: boolean }
 	/** The PNG asked for by the `export` with the same `id`; null when there is no graph. */
 	| { type: 'image'; id: number; blob: Blob | null };
