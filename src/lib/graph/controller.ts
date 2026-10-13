@@ -47,9 +47,15 @@ export class GraphController {
 				return;
 			}
 			if (message.type === 'layout') {
-				const { x, y, k, width, height } = message;
-				if (this.#stats) this.#stats = { ...this.#stats, width, height };
-				this.#setView(x, y, k);
+				const { x, y, k, home, width, height, rootTop, rootHeight } = message;
+				if (!this.#stats) return;
+				this.#stats = { ...this.#stats, width, height, rootTop, rootHeight };
+				if (home) {
+					this.home();
+				} else {
+					this.#limitZoom(this.#fitScale(this.#stats));
+					this.#setView(x, y, k);
+				}
 				return;
 			}
 			if (message.type === 'image') {
@@ -205,6 +211,11 @@ export class GraphController {
 			this.#exports.set(id, resolve);
 			this.#post({ type: 'export', id, options });
 		});
+	}
+
+	/** Collapses every box into its row, leaving the root, or shows every box again. */
+	collapseAll(collapsed: boolean) {
+		this.#post({ type: 'collapse', collapsed });
 	}
 
 	/** Shows the whole graph. */
