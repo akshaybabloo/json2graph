@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"wasm": "wasm-pack build crates/engine --target web --release --no-pack --out-name engine && wasm-pack build crates/formatter --target web --release --no-pack --out-name formatter",
-		"build": "wrangler types --check && pnpm run wasm && vite build",
+		"build": "pnpm run wasm && vite build",
 		"preview": "pnpm run build && wrangler dev",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "wrangler types --check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
