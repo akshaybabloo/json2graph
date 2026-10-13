@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ChevronsDownUpIcon from '@lucide/svelte/icons/chevrons-down-up';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
@@ -229,7 +231,17 @@
 	const tools = [
 		{ label: 'Zoom in', icon: ZoomInIcon, run: () => controller?.zoomBy(ZOOM_STEP) },
 		{ label: 'Zoom out', icon: ZoomOutIcon, run: () => controller?.zoomBy(1 / ZOOM_STEP) },
-		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() }
+		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() },
+		{
+			label: 'Collapse all nodes',
+			icon: ChevronsDownUpIcon,
+			run: () => controller?.collapseAll(true)
+		},
+		{
+			label: 'Expand all nodes',
+			icon: ChevronsUpDownIcon,
+			run: () => controller?.collapseAll(false)
+		}
 	];
 </script>
 
@@ -423,7 +435,8 @@
 						id="graph-help"
 						class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
 					>
-						Drag to pan · scroll to zoom · click a shortened value to expand it
+						Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide the
+						next one · click a shortened value to expand it
 						<span class="sr-only">
 							With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the graph.
 						</span>
