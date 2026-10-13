@@ -12,13 +12,13 @@ pnpm wasm   # build the engine into engine/pkg; repeat after changing engine/
 pnpm dev
 ```
 
-`pnpm build` builds the engine and then a static site in `build/`.
+`pnpm build` builds the engine and then a static site in `build/`. Set `VITE_SITE_URL` to the address the site is published at (see `.env.example`), so that the page can name its canonical address and the image that link previews show, and so that `sitemap.xml` lists the site.
 
 ## Using it
 
 - Edit the JSON on the left: the graph follows once the text is valid again.
 - Open a file with the button, or drop one anywhere on the page. Files over 5 MB are shown as a graph only. Example loads the sample document again, and Clear empties the editor and the graph.
-- Drag to pan, scroll to zoom, or use the buttons over the graph.
+- Drag to pan, scroll to zoom, or use the buttons over the graph. With the keyboard, once the graph has focus: the arrow keys pan, `+` and `-` zoom, and `0` fits the graph.
 - Hover a box to see how the document leads to it: the boxes and arrows from the root to that box stay as they are, with dashes running along the arrows the way they point, and the rest of the graph dims.
 - Click a value that ends in `…` to expand it onto wrapped lines; click again to collapse it.
 - Export saves a PNG of the whole graph, or of the part on screen when the whole graph would not be readable in one image. Its menu chooses the background (the current one, transparent, or a colour) and whether the grid is kept.
@@ -51,3 +51,5 @@ pnpm test:e2e      # Playwright, against a production build
 GitHub Actions runs them, with the Vitest tests, on every pull request and push to `main` (`.github/workflows/test.yml`).
 
 `scripts/generate-json.mjs <megabytes> <file>` writes a large test document.
+
+`scripts/generate-images.mjs` draws the app icons and the link-preview image in `static/` from the logo.

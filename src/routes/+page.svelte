@@ -14,8 +14,9 @@
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
-	import { GraphController } from '#lib/graph/controller.js';
+	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
+	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
 
 	/** Larger files are shown as a graph only: a text editor cannot hold them. */
@@ -24,8 +25,6 @@
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
 	/** Name of a document that was typed rather than opened. */
 	const UNTITLED = 'untitled.json';
-	/** How much one press of a zoom button magnifies. */
-	const ZOOM_STEP = 1.4;
 
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
@@ -54,6 +53,13 @@
 				count(stats.values, 'value'),
 				duration(stats.ms)
 			].join(' · ')
+	);
+
+	/** What the graph is, for those who cannot see the canvas. */
+	const graphLabel = $derived(
+		stats
+			? `Graph of ${name}: ${count(stats.boxes, 'node')}, ${count(stats.values, 'value')}`
+			: 'Graph: no document'
 	);
 
 	function bytes(n: number): string {
@@ -189,7 +195,7 @@
 </script>
 
 <svelte:head>
-	<title>json2graph</title>
+	<title>{SITE.title}</title>
 </svelte:head>
 
 <svelte:window
@@ -202,6 +208,12 @@
 />
 
 <div class="flex h-dvh flex-col">
+	<a
+		href="#graph"
+		class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:ring-2 focus:ring-ring"
+	>
+		Skip to the graph
+	</a>
 	<header class="flex items-center gap-2 border-b px-4 py-2 text-sm">
 		<h1 class="mr-2 flex items-center gap-1.5 font-semibold">
 			<Logo class="size-6" />
@@ -256,73 +268,95 @@
 		</Button>
 	</header>
 
-	<Resizable.PaneGroup direction="horizontal" class="min-h-0 flex-1">
-		<Resizable.Pane defaultSize={28} minSize={12} maxSize={70}>
-			<section class="relative flex h-full flex-col" aria-label="JSON source">
-				<div class="min-h-0 flex-1" {@attach source}></div>
+	<main class="flex min-h-0 flex-1">
+		<Resizable.PaneGroup direction="horizontal" class="min-h-0 flex-1">
+			<Resizable.Pane defaultSize={28} minSize={12} maxSize={70}>
+				<section class="relative flex h-full flex-col" aria-label="JSON source">
+					<div class="min-h-0 flex-1" {@attach source}></div>
 
-				{#if error}
-					<p class="border-t px-3 py-1.5 text-xs text-destructive" role="alert">{error}</p>
-				{/if}
+					{#if error}
+						<p class="border-t px-3 py-1.5 text-xs text-destructive" role="alert">{error}</p>
+					{/if}
 
-				{#if tooLarge !== null}
-					<div
-						class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
-					>
-						<p class="max-w-xs text-muted-foreground">
-							<span class="font-medium text-foreground">{name}</span> is {bytes(tooLarge)}, which is
-							too large to edit as text. The graph shows the whole file.
-						</p>
-					</div>
-				{/if}
-			</section>
-		</Resizable.Pane>
-
-		<Resizable.Handle withHandle />
-
-		<Resizable.Pane>
-			<main class="relative h-full">
-				<canvas
-					{@attach graph}
-					class="absolute inset-0 h-full w-full touch-none"
-					aria-label="Graph of the JSON document"
-				></canvas>
-
-				<div
-					class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
-					role="toolbar"
-					aria-label="Graph view"
-					aria-orientation="vertical"
-				>
-					{#each tools as tool (tool.label)}
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							disabled={!stats}
-							aria-label={tool.label}
-							title={tool.label}
-							onclick={tool.run}
+					{#if tooLarge !== null}
+						<div
+							class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
 						>
-							<tool.icon />
-						</Button>
-					{/each}
-					<ExportMenu disabled={!stats} onexport={exportImage} />
-				</div>
+							<p class="max-w-xs text-muted-foreground">
+								<span class="font-medium text-foreground">{name}</span> is {bytes(tooLarge)}, which
+								is too large to edit as text. The graph shows the whole file.
+							</p>
+						</div>
+					{/if}
+				</section>
+			</Resizable.Pane>
 
-				{#if progress}
-					<div class="absolute inset-x-0 top-0 h-1 bg-muted">
-						<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
+			<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
+
+			<Resizable.Pane>
+				<section class="relative h-full" aria-label="Graph">
+					<!--
+					The canvas takes the keys that move the view (see GraphController),
+					which no standard widget does: that is what the application role is for.
+				-->
+					<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+					<canvas
+						{@attach graph}
+						id="graph"
+						class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
+						role="application"
+						tabindex="0"
+						aria-label={graphLabel}
+						aria-describedby="graph-help"
+					></canvas>
+
+					<div
+						class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
+						role="toolbar"
+						aria-label="Graph view"
+						aria-orientation="vertical"
+					>
+						{#each tools as tool (tool.label)}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								disabled={!stats}
+								aria-label={tool.label}
+								title={tool.label}
+								onclick={tool.run}
+							>
+								<tool.icon />
+							</Button>
+						{/each}
+						<ExportMenu disabled={!stats} onexport={exportImage} />
 					</div>
-				{/if}
 
-				<p
-					class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
-				>
-					Drag to pan · scroll to zoom · click a shortened value to expand it
-				</p>
-			</main>
-		</Resizable.Pane>
-	</Resizable.PaneGroup>
+					{#if progress}
+						<div
+							class="absolute inset-x-0 top-0 h-1 bg-muted"
+							role="progressbar"
+							aria-label={progress.label}
+							aria-valuemin={0}
+							aria-valuemax={100}
+							aria-valuenow={Math.round(progress.fraction * 100)}
+						>
+							<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
+						</div>
+					{/if}
+
+					<p
+						id="graph-help"
+						class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+					>
+						Drag to pan · scroll to zoom · click a shortened value to expand it
+						<span class="sr-only">
+							With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the graph.
+						</span>
+					</p>
+				</section>
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
+	</main>
 
 	{#if dragging}
 		<div

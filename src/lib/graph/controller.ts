@@ -1,5 +1,5 @@
 import { select } from 'd3-selection';
-import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom';
+import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom';
 import type { ExportOptions, FromWorker, GraphStats, LoadEvent, ToWorker } from './protocol';
 import { readTheme } from './theme';
 
@@ -8,6 +8,10 @@ const MARGIN = 48;
 /** Below this scale the text is too small to read. */
 const READABLE_SCALE = 0.5;
 const MAX_SCALE = 4;
+/** How much one press of a zoom button or key magnifies. */
+export const ZOOM_STEP = 1.4;
+/** How far one press of an arrow key moves the graph, in pixels. */
+const PAN_STEP = 80;
 
 /**
  * Page-side half of the graph view: hands the canvas to the worker, and keeps
@@ -106,9 +110,43 @@ export class GraphController {
 			this.#post({ type: 'hover', x: event.offsetX, y: event.offsetY });
 		};
 		const onLeave = () => this.#post({ type: 'leave' });
+		// The view can be moved without a pointer, once the canvas has focus.
+		const onKey = (event: KeyboardEvent) => {
+			if (event.ctrlKey || event.metaKey || event.altKey) return;
+			const step = event.shiftKey ? PAN_STEP * 4 : PAN_STEP;
+			switch (event.key) {
+				case 'ArrowLeft':
+					this.#panBy(step, 0);
+					break;
+				case 'ArrowRight':
+					this.#panBy(-step, 0);
+					break;
+				case 'ArrowUp':
+					this.#panBy(0, step);
+					break;
+				case 'ArrowDown':
+					this.#panBy(0, -step);
+					break;
+				case '+':
+				case '=':
+					this.zoomBy(ZOOM_STEP);
+					break;
+				case '-':
+				case '_':
+					this.zoomBy(1 / ZOOM_STEP);
+					break;
+				case '0':
+					this.fit();
+					break;
+				default:
+					return;
+			}
+			event.preventDefault();
+		};
 		canvas.addEventListener('click', onClick);
 		canvas.addEventListener('pointermove', onMove);
 		canvas.addEventListener('pointerleave', onLeave);
+		canvas.addEventListener('keydown', onKey);
 
 		this.#disconnect = () => {
 			themeObserver.disconnect();
@@ -117,6 +155,7 @@ export class GraphController {
 			canvas.removeEventListener('click', onClick);
 			canvas.removeEventListener('pointermove', onMove);
 			canvas.removeEventListener('pointerleave', onLeave);
+			canvas.removeEventListener('keydown', onKey);
 		};
 	}
 
@@ -204,6 +243,12 @@ export class GraphController {
 	/** Lets the user zoom out until the whole graph is half the size of the canvas. */
 	#limitZoom(fitScale: number) {
 		this.#zoom.scaleExtent([Math.max(Math.min(fitScale, 1) / 2, 1e-9), MAX_SCALE]);
+	}
+
+	/** Moves the graph by a distance in screen pixels. */
+	#panBy(dx: number, dy: number) {
+		const { k } = zoomTransform(this.#canvas);
+		select(this.#canvas).call(this.#zoom.translateBy, dx / k, dy / k);
 	}
 
 	#setView(x: number, y: number, k: number) {

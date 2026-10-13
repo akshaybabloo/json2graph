@@ -86,6 +86,7 @@ export class JsonEditor {
 				theme,
 				syntaxHighlighting(highlighting),
 				indentGuides,
+				EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
 				// Dropped files are opened by the page, not inserted as text.
 				EditorView.domEventHandlers({
 					drop: (event) => Boolean(event.dataTransfer?.files.length)

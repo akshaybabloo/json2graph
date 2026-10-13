@@ -173,3 +173,14 @@
 	--json-boolean: #c4b5fd;
 	--json-container: #7dd3fc;
 }
+
+/* For those who ask for less motion, popovers and transitions do not animate. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	::before,
+	::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

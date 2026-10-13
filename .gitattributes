@@ -1,1 +1,2 @@
 src/lib/components/ui/**/* linguist-generated=true
+*.png filter=lfs diff=lfs merge=lfs -text

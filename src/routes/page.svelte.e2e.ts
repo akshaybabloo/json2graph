@@ -39,6 +39,67 @@ test('shows the sample in the editor and as a graph', async ({ page }) => {
 	await expect(page.locator('.cm-content')).toContainText('"name": "json2graph"');
 });
 
+test('describes itself to search engines and link previews', async ({ page }) => {
+	await expect(page).toHaveTitle('json2graph: view JSON as a graph');
+	await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+		'content',
+		/JSON document as a graph/
+	);
+	await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', /json2graph/);
+	await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+		'href',
+		/manifest\.webmanifest$/
+	);
+
+	const structured = await page.locator('script[type="application/ld+json"]').textContent();
+	expect(JSON.parse(structured ?? '')).toMatchObject({
+		'@type': 'WebApplication',
+		name: 'json2graph'
+	});
+});
+
+test('serves a sitemap and lets crawlers in', async ({ request }) => {
+	const sitemap = await request.get('/sitemap.xml');
+	expect(sitemap.headers()['content-type']).toContain('xml');
+	expect(await sitemap.text()).toContain(
+		'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+	);
+
+	const robots = await request.get('/robots.txt');
+	expect(await robots.text()).toContain('User-agent: *\nDisallow:\n');
+});
+
+test('moves the view from the keyboard', async ({ page }) => {
+	const canvas = page.getByRole('application', {
+		name: 'Graph of sample.json: 16 nodes, 52 values'
+	});
+	const view = () =>
+		canvas.evaluate((element) => {
+			const { x, y, k } = (element as unknown as { __zoom: { x: number; y: number; k: number } })
+				.__zoom;
+			return { x, y, k };
+		});
+
+	// The skip link is the first stop of the page, and leads to the canvas.
+	await page.keyboard.press('Tab');
+	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(canvas).toBeFocused();
+
+	const start = await view();
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowDown');
+	const panned = await view();
+	expect(panned.x).toBeCloseTo(start.x - 80);
+	expect(panned.y).toBeCloseTo(start.y - 80);
+
+	await page.keyboard.press('+');
+	expect((await view()).k).toBeGreaterThan(start.k);
+	await page.keyboard.press('-');
+	await page.keyboard.press('-');
+	expect((await view()).k).toBeLessThan(start.k);
+});
+
 test('links to the repository on GitHub', async ({ page }) => {
 	const link = page.getByRole('link', { name: 'json2graph on GitHub' });
 	await expect(link).toHaveAttribute('href', 'https://github.com/akshaybabloo/json2graph');
