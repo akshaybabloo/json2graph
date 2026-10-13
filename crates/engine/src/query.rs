@@ -294,11 +294,12 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
         let end = kids.partition_point(|c| c.band_top <= y1);
         let mut i = start;
         while i < end {
-            let c = &kids[i];
             if g.is_collapsed(b.child_first + i as u32) {
-                i += 1;
+                // However many are collapsed here, in one step.
+                i = g.shown_from(b, i);
                 continue;
             }
+            let c = &kids[i];
             if gap_visible {
                 f.edges.extend(edge(c));
             }

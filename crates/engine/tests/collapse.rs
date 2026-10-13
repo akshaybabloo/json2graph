@@ -175,3 +175,45 @@ fn every_box_can_be_collapsed_or_shown_at_once() {
     assert_eq!(places(&g), before);
     assert_eq!(frame(&g, DOCUMENT).boxes.len() / 4, 4);
 }
+
+#[test]
+fn a_run_of_collapsed_boxes_is_stepped_over_to_the_next_one_shown() {
+    // An array of a thousand objects, boxes 1 to 1000, of which only two are
+    // shown: one after a long run of collapsed boxes, and the last.
+    let src = format!("[{}]", vec![r#"{"a": 1}"#; 1000].join(","));
+    let mut g = graph(&src);
+    g.set_all_collapsed(&METRICS, true);
+    for id in [701, 1000] {
+        g.toggle_box(&METRICS, id);
+    }
+
+    let root = &g.boxes[0];
+    assert_eq!(g.shown_from(root, 0), 700);
+    assert_eq!(g.shown_from(root, 700), 700);
+    assert_eq!(g.shown_from(root, 701), 999);
+    assert_eq!(g.shown_from(root, 1000), 1000);
+    // With the last box collapsed as well, the run goes on to the end.
+    g.toggle_box(&METRICS, 1000);
+    assert_eq!(g.shown_from(&g.boxes[0], 701), 1000);
+    g.toggle_box(&METRICS, 1000);
+
+    // Both are drawn, with their edges, and found under the pointer. They are
+    // half way down the root, which is far taller than the two of them.
+    let view = View {
+        x: 0.0,
+        y: 2000.0 - g.boxes[701].band_top,
+        k: 1.0,
+        width: 4000.0,
+        height: 4000.0,
+        text: true,
+    };
+    let mut frame = Frame::default();
+    query(&g, src.as_bytes(), &METRICS, &view, &mut frame);
+    assert_eq!(frame.boxes.len() / 4, 3);
+    assert_eq!(frame.edges.len() / 4, 2);
+    for id in [701, 1000] {
+        let b = &g.boxes[id as usize];
+        let inside = (b.x as f64 + 5.0, g.box_top(b, &METRICS) + 5.0);
+        assert_eq!(g.box_at(&METRICS, inside.0, inside.1), Some(id));
+    }
+}

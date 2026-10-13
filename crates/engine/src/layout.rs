@@ -266,11 +266,9 @@ impl Graph {
             }
             // Further right: the child whose band contains `y`.
             let kids = self.children(b);
-            let mut i = kids.partition_point(|c| c.band_top + c.band_h < y);
+            let i = kids.partition_point(|c| c.band_top + c.band_h < y);
             // A collapsed box has an empty band, where the next one starts.
-            while i < kids.len() && self.is_collapsed(b.child_first + i as u32) {
-                i += 1;
-            }
+            let i = self.shown_from(b, i);
             if i == kids.len() || kids[i].band_top > y {
                 return None;
             }
@@ -327,6 +325,25 @@ impl Graph {
     pub fn is_collapsed(&self, id: u32) -> bool {
         let word = self.collapsed.get(id as usize / 64);
         word.is_some_and(|word| word >> (id % 64) & 1 == 1)
+    }
+
+    /// The first child of `b` at or after index `i` that is shown, or the
+    /// number of children when there is none.
+    ///
+    /// Collapsed children are stepped over a run at a time, however long the
+    /// run: none of them moves the next band down, so they all share their
+    /// `band_top` with the shown child that follows them.
+    pub fn shown_from(&self, b: &BoxRec, mut i: usize) -> usize {
+        let kids = self.children(b);
+        let collapsed = |i: usize| self.is_collapsed(b.child_first + i as u32);
+        while i < kids.len() && collapsed(i) {
+            let top = kids[i].band_top;
+            let past = i + kids[i..].partition_point(|c| c.band_top <= top);
+            // The last child at that height is the shown one, unless the run
+            // goes on to the last child.
+            i = if collapsed(past - 1) { past } else { past - 1 };
+        }
+        i
     }
 
     /// The box that a click at a world position would collapse or show again:
