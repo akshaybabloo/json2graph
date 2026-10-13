@@ -12,7 +12,7 @@ pnpm wasm   # build the WebAssembly packages; repeat after changing crates/
 pnpm dev
 ```
 
-`pnpm build` builds the WebAssembly packages and then a static site in `build/`. Set `VITE_SITE_URL` to the address the site is published at (see `.env.example`), so that the page can name its canonical address and the image that link previews show, and so that `sitemap.xml` lists the site.
+`pnpm build` builds the WebAssembly packages and then the site, as a Cloudflare Worker with static assets, in `.svelte-kit/cloudflare/`. Set `VITE_SITE_URL` to the address the site is published at (see `.env.example`), so that the page can name its canonical address and the image that link previews show, and so that `sitemap.xml` lists the site.
 
 ## Using it
 
@@ -49,7 +49,13 @@ pnpm test:engine   # Rust tests, in crates/*/tests/
 pnpm test:e2e      # Playwright, against a production build
 ```
 
-GitHub Actions runs them, with the Vitest tests, on every pull request and push to `main` (`.github/workflows/test.yml`).
+GitHub Actions runs them, with the Vitest tests, on every pull request (`.github/workflows/test.yml`) and before every deployment.
+
+## Deployment
+
+A push to `main` runs the tests and, when they pass, builds the site and deploys it to Cloudflare Workers with `wrangler deploy` (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
+
+`pnpm run deploy` does the same from a machine that is logged in to Cloudflare, without running the tests.
 
 `scripts/generate-json.mjs <megabytes> <file>` writes a large test document.
 
