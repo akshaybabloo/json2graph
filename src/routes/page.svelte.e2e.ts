@@ -47,6 +47,24 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
 });
 
+test('shows a document typed into the empty page in the middle of the canvas', async ({ page }) => {
+	await replaceSource(page, '{"a": {"b": 1}}');
+	await expect(page.getByText('2 nodes')).toBeVisible();
+
+	// This small graph is a fraction of the canvas, so centred, it starts well
+	// away from the top left corner.
+	const canvas = page.locator('canvas');
+	const view = await canvas.evaluate((element) => {
+		const { x, y, k } = (element as unknown as { __zoom: { x: number; y: number; k: number } })
+			.__zoom;
+		return { x, y, k };
+	});
+	const { width, height } = (await canvas.boundingBox())!;
+	expect(view.k).toBe(1);
+	expect(view.x).toBeGreaterThan(width / 4);
+	expect(view.y).toBeGreaterThan(height / 4);
+});
+
 test('shows that the engine is loading until it has loaded', async ({ page }) => {
 	let release!: () => void;
 	const held = new Promise<void>((resolve) => (release = resolve));

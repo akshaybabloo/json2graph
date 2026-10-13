@@ -175,7 +175,9 @@ export class GraphController {
 	 * pan and zoom are left alone, which suits edits to the same document.
 	 */
 	load(data: Blob, { keepView = false } = {}) {
-		this.#keepView = keepView;
+		// With no graph on screen there is no view to keep: the first one gets
+		// the starting view, like any newly opened document.
+		this.#keepView = keepView && this.#stats !== null;
 		this.#load += 1;
 		this.#post({ type: 'load', id: this.#load, data });
 	}
