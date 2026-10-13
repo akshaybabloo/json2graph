@@ -80,6 +80,7 @@ impl Document {
         pad_y: f64,
         gap_x: f64,
         gap_y: f64,
+        toggle_w: f64,
         max_key: u32,
         max_val: u32,
     ) {
@@ -90,6 +91,7 @@ impl Document {
             pad_y,
             gap_x,
             gap_y,
+            toggle_w,
             max_key,
             max_val,
         };
@@ -177,27 +179,49 @@ impl Document {
             .unwrap_or(parse::NONE)
     }
 
-    /// Whether a click at a screen position, under the view transform
-    /// (`x`, `y`, `k`), would expand or collapse a value.
-    pub fn expandable_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> bool {
-        let (graph, metrics) = (self.graph(), self.metrics());
-        graph
-            .hit(metrics, (screen_x - x) / k, (screen_y - y) / k)
-            .is_some_and(|(id, row)| graph.is_expandable(metrics, id, row))
+    /// Whether a screen position, under the view transform (`x`, `y`, `k`), is
+    /// on the control that collapses a box or shows it again.
+    pub fn collapsible_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> bool {
+        let (x, y) = ((screen_x - x) / k, (screen_y - y) / k);
+        self.graph().collapsible_at(self.metrics(), x, y).is_some()
     }
 
-    /// Expands the value at a screen position onto wrapped lines, or collapses
-    /// it again. Returns how far down the clicked row moved, in world pixels,
-    /// or NaN if there was nothing to expand there.
+    /// Whether a click at a screen position, under the view transform
+    /// (`x`, `y`, `k`), would do something: expand a value or collapse it
+    /// again, or collapse a box or show it again.
+    pub fn expandable_at(&self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> bool {
+        let (graph, metrics) = (self.graph(), self.metrics());
+        let (x, y) = ((screen_x - x) / k, (screen_y - y) / k);
+        graph.collapsible_at(metrics, x, y).is_some()
+            || graph
+                .hit(metrics, x, y)
+                .is_some_and(|(id, row)| graph.is_expandable(metrics, id, row))
+    }
+
+    /// Acts on a click at a screen position. On the control of a row, at the
+    /// right edge of its box, it collapses the box of the value there, or shows it again.
+    /// Elsewhere on a value that is cut short, it expands the value onto
+    /// wrapped lines, or collapses it again. Returns how far down the clicked
+    /// row moved, in world pixels, or NaN if there was nothing to do there.
     pub fn toggle_at(&mut self, x: f64, y: f64, k: f64, screen_x: f64, screen_y: f64) -> f64 {
         let metrics = *self.metrics();
         let graph = self.graph.as_mut().expect("document is not parsed yet");
-        let Some((id, row)) = graph.hit(&metrics, (screen_x - x) / k, (screen_y - y) / k) else {
-            return f64::NAN;
+        let (x, y) = ((screen_x - x) / k, (screen_y - y) / k);
+        let moved = if let Some(id) = graph.collapsible_at(&metrics, x, y) {
+            graph.toggle_box(&metrics, id)
+        } else {
+            graph
+                .hit(&metrics, x, y)
+                .and_then(|(id, row)| graph.toggle(&self.source, &metrics, id, row))
         };
-        graph
-            .toggle(&self.source, &metrics, id, row)
-            .unwrap_or(f64::NAN)
+        moved.unwrap_or(f64::NAN)
+    }
+
+    /// Collapses every box into its row, leaving the root, or shows every box
+    /// again.
+    pub fn collapse_all(&mut self, collapsed: bool) {
+        let metrics = *self.metrics();
+        self.graph_mut().set_all_collapsed(&metrics, collapsed);
     }
 
     pub fn boxes_ptr(&self) -> usize {
