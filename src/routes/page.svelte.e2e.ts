@@ -50,7 +50,7 @@ test('starts with no document and says how to open one', async ({ page }) => {
 test('shows a document typed into the empty page in the middle of the canvas', async ({ page }) => {
 	await replaceSource(page, '{"a": {"b": 1}}');
 	// It has no file, so the summary stands without a name.
-	await expect(page.getByText(/^15 B · 2 nodes/)).toBeVisible();
+	await expect(page.locator('header p[aria-live]')).toHaveText(/^\s*15 B · 2 nodes/);
 
 	// This small graph is a fraction of the canvas, so centred, it starts well
 	// away from the top left corner.
