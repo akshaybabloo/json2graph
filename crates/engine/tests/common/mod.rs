@@ -10,6 +10,7 @@ pub const METRICS: Metrics = Metrics {
     pad_y: 6.0,
     gap_x: 60.0,
     gap_y: 16.0,
+    toggle_w: 18.0,
     max_key: 32,
     max_val: 48,
 };
