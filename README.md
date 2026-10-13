@@ -55,6 +55,8 @@ GitHub Actions runs them, with the Vitest tests, on every pull request (`.github
 
 A push to `main` runs the tests and, when they pass, builds the site and deploys it to Cloudflare Workers with `wrangler deploy` (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
 
+A pull request from a branch of this repository gets a preview: `.github/workflows/preview.yml` builds it as a Cloudflare [Preview](https://developers.cloudflare.com/workers/previews/) named `pr-<number>`, which leaves production as it is, and keeps one comment on the pull request with its address and the commit it was built from. Closing the pull request deletes the preview and says so in that comment.
+
 `pnpm run deploy` does the same from a machine that is logged in to Cloudflare, without running the tests.
 
 `scripts/generate-json.mjs <megabytes> <file>` writes a large test document.
