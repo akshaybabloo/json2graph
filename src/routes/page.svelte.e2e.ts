@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
 /** Replaces the whole text of the editor, as a paste would. */
@@ -47,14 +47,20 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
 });
 
-test('lets the editor be cleared only when there is something in it', async ({ page }) => {
+test('lets the editor be formatted and cleared only when there is something in it', async ({
+	page
+}) => {
+	const format = page.getByRole('button', { name: 'Format' });
 	const clear = page.getByRole('button', { name: 'Clear' });
+	await expect(format).toBeDisabled();
 	await expect(clear).toBeDisabled();
 
 	await page.locator('.cm-content').click();
 	await page.keyboard.insertText('{');
+	await expect(format).toBeEnabled();
 	await expect(clear).toBeEnabled();
 	await page.keyboard.press('Backspace');
+	await expect(format).toBeDisabled();
 	await expect(clear).toBeDisabled();
 });
 
@@ -104,6 +110,49 @@ test('formats the document without changing its values', async ({ page }) => {
 		'{',
 		'"big":12345678901234567890,"list":[1.0,{}]}'
 	]);
+});
+
+test('opens a file of several megabytes into the editor as well as the graph', async ({ page }) => {
+	const rows = Array.from({ length: 60_000 }, (_, id) => ({
+		id,
+		name: `row-${id}`,
+		note: 'x'.repeat(64)
+	}));
+	const text = JSON.stringify(rows, null, 2);
+	expect(text.length).toBeGreaterThan(6_000_000);
+	await page.locator('input[type=file]').setInputFiles({
+		name: 'rows.json',
+		mimeType: 'application/json',
+		buffer: Buffer.from(text)
+	});
+
+	await expect(page.getByText(/60,001 nodes/)).toBeVisible();
+	await expect(page.locator('.cm-content')).toContainText('"name": "row-0"');
+	await expect(page.getByText(/too large to edit as text/)).toBeHidden();
+	await expect(page.getByRole('button', { name: 'Format' })).toBeEnabled();
+});
+
+test('shows a file too large for the editor as a graph only, with nothing to format', async ({
+	page
+}) => {
+	const format = page.getByRole('button', { name: 'Format' });
+	const clear = page.getByRole('button', { name: 'Clear' });
+	await replaceSource(page, '{"a":1}');
+	await expect(format).toBeEnabled();
+
+	// A little over the hundred megabytes that the editor takes, so it is emptied.
+	const large = test.info().outputPath('large.json');
+	await writeFile(large, JSON.stringify(Array.from({ length: 106 }, () => 'x'.repeat(1_000_000))));
+	await page.locator('input[type=file]').setInputFiles(large);
+	await expect(page.getByText(/too large to edit as text/)).toBeVisible();
+	await expect(page.getByText(/1 node · 107 values/)).toBeVisible();
+	await expect(format).toBeDisabled();
+
+	// The file is still open, so it can be cleared.
+	await expect(clear).toBeEnabled();
+	await clear.click();
+	await expect(page.getByText(/too large to edit as text/)).toBeHidden();
+	await expect(clear).toBeDisabled();
 });
 
 test('undoes formatting without undoing what was typed just before it', async ({ page }) => {

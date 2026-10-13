@@ -22,8 +22,12 @@
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
 
-	/** Larger files are shown as a graph only: a text editor cannot hold them. */
-	const EDITOR_LIMIT = 5 * 1024 * 1024;
+	/**
+	 * Larger files are shown as a graph only. The editor draws just the lines on
+	 * screen, so scrolling is not what limits it: holding the text is, and
+	 * handing all of it to the graph again after every edit.
+	 */
+	const EDITOR_LIMIT = 100 * 1024 * 1024;
 	const REPOSITORY = 'https://github.com/akshaybabloo/json2graph';
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
 	/** What an image of a document that was typed rather than opened is called. */
@@ -271,7 +275,7 @@
 		<Button
 			variant="outline"
 			size="sm"
-			disabled={tooLarge !== null}
+			disabled={empty}
 			title="Format the JSON (Shift+Alt+F in the editor)"
 			onclick={format}
 		>

@@ -17,7 +17,7 @@ pnpm dev
 ## Using it
 
 - Edit the JSON on the left: the graph follows once the text is valid again. Format (or Shift+Alt+F in the editor) re-indents it with [Biome](https://biomejs.dev)'s formatter.
-- Open a file with the button, or drop one anywhere on the page. Files over 5 MB are shown as a graph only. Example loads a sample document, and Clear empties the editor and the graph.
+- Open a file with the button, or drop one anywhere on the page. Files over 100 MB are shown as a graph only. Example loads a sample document, and Clear empties the editor and the graph.
 - Drag to pan, scroll to zoom, or use the buttons over the graph. With the keyboard, once the graph has focus: the arrow keys pan, `+` and `-` zoom, and `0` fits the graph.
 - Hover a box to see how the document leads to it: the boxes and arrows from the root to that box stay as they are, with dashes running along the arrows the way they point, and the rest of the graph dims.
 - Click a value that ends in `…` to expand it onto wrapped lines; click again to collapse it.
