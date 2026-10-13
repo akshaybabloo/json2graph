@@ -35,6 +35,8 @@
 
 	/** Name of the open file; none for a document that was typed. */
 	let name = $state<string | null>(null);
+	/** Whether the editor has no text. */
+	let empty = $state(true);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
 	let engineReady = $state(false);
 	let engineError = $state<string | null>(null);
@@ -92,7 +94,11 @@
 	}
 
 	function source(parent: HTMLElement) {
-		editor = new JsonEditor(parent, onEdit, format);
+		editor = new JsonEditor(parent, {
+			onEdit,
+			onFormat: format,
+			onEmpty: (value) => (empty = value)
+		});
 		return () => {
 			editor?.destroy();
 			editor = undefined;
@@ -154,6 +160,8 @@
 		tooLarge = null;
 		editor?.setText('');
 		clearGraph();
+		// The button is now disabled, and would drop the focus it has.
+		editor?.focus();
 	}
 
 	async function open(file: File) {
@@ -270,7 +278,7 @@
 			<ListIndentIncreaseIcon />
 			Format
 		</Button>
-		<Button variant="outline" size="sm" onclick={clear}>
+		<Button variant="outline" size="sm" disabled={empty && name === null} onclick={clear}>
 			<EraserIcon />
 			Clear
 		</Button>

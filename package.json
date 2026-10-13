@@ -74,6 +74,7 @@
 	"imports": {
 		"#engine": "./crates/engine/pkg/engine.js",
 		"#formatter": "./crates/formatter/pkg/formatter.js",
+		"#formatter/wasm": "./crates/formatter/pkg/formatter_bg.wasm",
 		"#lib": "./src/lib/index.js",
 		"#lib/*": "./src/lib/*"
 	},

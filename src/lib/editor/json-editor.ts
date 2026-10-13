@@ -73,13 +73,22 @@ const highlighting = HighlightStyle.define([
 	{ tag: [tags.separator, tags.squareBracket, tags.brace], color: 'var(--muted-foreground)' }
 ]);
 
+/** What the editor tells the page. */
+export type EditorHandlers = {
+	/** The text after an edit, once typing pauses. */
+	onEdit: (text: string) => void;
+	/** The keys that format a document were pressed. */
+	onFormat: () => void;
+	/** The editor became empty, or is no longer empty. */
+	onEmpty: (empty: boolean) => void;
+};
+
 /** A CodeMirror editor for JSON that reports edits once typing pauses. */
 export class JsonEditor {
 	#view: EditorView;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 
-	/** `onFormat` is called when the keys that format a document are pressed. */
-	constructor(parent: HTMLElement, onEdit: (text: string) => void, onFormat: () => void) {
+	constructor(parent: HTMLElement, { onEdit, onFormat, onEmpty }: EditorHandlers) {
 		this.#view = new EditorView({
 			parent,
 			extensions: [
@@ -97,6 +106,8 @@ export class JsonEditor {
 				}),
 				EditorView.updateListener.of((update) => {
 					if (!update.docChanged) return;
+					const empty = update.state.doc.length === 0;
+					if (empty !== (update.startState.doc.length === 0)) onEmpty(empty);
 					if (update.transactions.some((tr) => tr.annotation(external))) return;
 					clearTimeout(this.#timer);
 					this.#timer = setTimeout(() => onEdit(this.#view.state.doc.toString()), EDIT_DELAY);
@@ -130,6 +141,10 @@ export class JsonEditor {
 			// Its own step to undo, also straight after typing.
 			annotations: isolateHistory.of('full')
 		});
+	}
+
+	focus() {
+		this.#view.focus();
 	}
 
 	destroy() {

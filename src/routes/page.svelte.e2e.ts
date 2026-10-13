@@ -47,6 +47,17 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
 });
 
+test('lets the editor be cleared only when there is something in it', async ({ page }) => {
+	const clear = page.getByRole('button', { name: 'Clear' });
+	await expect(clear).toBeDisabled();
+
+	await page.locator('.cm-content').click();
+	await page.keyboard.insertText('{');
+	await expect(clear).toBeEnabled();
+	await page.keyboard.press('Backspace');
+	await expect(clear).toBeDisabled();
+});
+
 test('shows a document typed into the empty page in the middle of the canvas', async ({ page }) => {
 	await replaceSource(page, '{"a": {"b": 1}}');
 	// It has no file, so the summary stands without a name.
@@ -103,6 +114,25 @@ test('undoes formatting without undoing what was typed just before it', async ({
 
 	await page.keyboard.press('ControlOrMeta+z');
 	await expect(page.locator('.cm-line')).toHaveText(['{"a":1}']);
+});
+
+test('fetches the formatter when it is first used, and only then', async ({ page }) => {
+	const fetched: string[] = [];
+	page.on('request', (request) => {
+		if (/formatter_bg.*\.wasm/.test(request.url())) fetched.push(request.url());
+	});
+	const format = page.getByRole('button', { name: 'Format' });
+
+	await replaceSource(page, '{"a":1}');
+	await expect(page.getByText('1 node')).toBeVisible();
+	expect(fetched).toHaveLength(0);
+
+	await format.click();
+	await expect(page.locator('.cm-line')).toHaveText(['{ "a": 1 }', '']);
+	await replaceSource(page, '{"b":2}');
+	await format.click();
+	await expect(page.locator('.cm-line')).toHaveText(['{ "b": 2 }', '']);
+	expect(fetched).toHaveLength(1);
 });
 
 test('leaves text that is not JSON as it is when asked to format it', async ({ page }) => {
@@ -355,6 +385,8 @@ test.describe('with the example open', () => {
 		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
 		await expect(page.getByRole('alert')).toBeHidden();
 		await expect(page.getByText('sample.json')).toBeHidden();
+		await expect(page.getByRole('button', { name: 'Clear' })).toBeDisabled();
+		await expect(page.locator('.cm-content')).toBeFocused();
 		await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
 		await expect(page.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
 
