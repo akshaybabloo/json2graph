@@ -1,3 +1,4 @@
+import { isolateHistory } from '@codemirror/commands';
 import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { Annotation } from '@codemirror/state';
@@ -124,7 +125,11 @@ export class JsonEditor {
 	replace(text: string) {
 		const { doc } = this.#view.state;
 		if (doc.toString() === text) return;
-		this.#view.dispatch({ changes: { from: 0, to: doc.length, insert: text } });
+		this.#view.dispatch({
+			changes: { from: 0, to: doc.length, insert: text },
+			// Its own step to undo, also straight after typing.
+			annotations: isolateHistory.of('full')
+		});
 	}
 
 	destroy() {

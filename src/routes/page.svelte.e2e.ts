@@ -94,6 +94,16 @@ test('formats the document without changing its values', async ({ page }) => {
 	]);
 });
 
+test('undoes formatting without undoing what was typed just before it', async ({ page }) => {
+	await page.locator('.cm-content').click();
+	await page.keyboard.insertText('{"a":1}');
+	await page.keyboard.press('Shift+Alt+f');
+	await expect(page.locator('.cm-line')).toHaveText(['{ "a": 1 }', '']);
+
+	await page.keyboard.press('ControlOrMeta+z');
+	await expect(page.locator('.cm-line')).toHaveText(['{"a":1}']);
+});
+
 test('leaves text that is not JSON as it is when asked to format it', async ({ page }) => {
 	await replaceSource(page, '{"a": 1,}');
 	await expect(page.getByRole('alert')).toContainText('line 1');
