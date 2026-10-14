@@ -542,6 +542,28 @@ test.describe('tabs', () => {
 		).toBeVisible();
 	});
 
+	test('asks before the page is left while an edit is not yet saved', async ({ page }) => {
+		const typed = '{"late": 1}';
+		await replaceSource(page, typed);
+		const asked = new Promise<string>((resolve) => {
+			page.once('dialog', async (dialog) => {
+				resolve(dialog.type());
+				// Stay on the page.
+				await dialog.dismiss();
+			});
+		});
+		page.reload({ timeout: 5000 }).catch(() => {});
+		expect(await asked).toBe('beforeunload');
+
+		// Asking started the save, so leaving no longer asks.
+		await expect.poll(() => savedTabs(page)).toEqual([{ name: null, size: typed.length }]);
+		page.once('dialog', (dialog) => {
+			throw new Error(`Asked again: ${dialog.type()}`);
+		});
+		await page.reload();
+		await expect(page.locator('.cm-content')).toHaveText(typed);
+	});
+
 	test('forgets a closed tab', async ({ page }) => {
 		await openFile(page, 'a.json', A);
 		await openFile(page, 'b.json', B);

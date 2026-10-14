@@ -404,7 +404,8 @@
 		let next = Math.max(tabCount, ...session.tabs.map((record) => record.id));
 		const taken = new Set(pristine ? [] : tabs.map((t) => t.id));
 		const restored = session.tabs.map((record) => {
-			const content = contents.get(record.id) ?? null;
+			// A tab saved with nothing has no content, whatever is left under its id.
+			const content = record.size > 0 ? (contents.get(record.id) ?? null) : null;
 			let id = record.id;
 			if (taken.has(id)) {
 				id = ++next;
@@ -433,8 +434,19 @@
 
 	/** Saves what is waiting to be saved: the page is being hidden, and may be closed. */
 	function flush() {
-		if (editor?.pending && !readingText) saver?.content(tab.id, jsonBlob(editor.text));
+		// Reported now, the edit is saved now too.
+		if (!readingText) editor?.flush();
 		saver?.flush();
+	}
+
+	/**
+	 * Asks before the page is left while an edit is not yet saved, and starts
+	 * saving it, so that it is saved by the time the question is answered.
+	 */
+	function onBeforeUnload(event: BeforeUnloadEvent) {
+		if (!saver || (!editor?.pending && !saver.busy)) return;
+		flush();
+		event.preventDefault();
 	}
 
 	function selectTab(id: number) {
@@ -589,6 +601,7 @@
 		if (!event.relatedTarget) dragging = false;
 	}}
 	ondrop={onDrop}
+	onbeforeunload={onBeforeUnload}
 	onpagehide={flush}
 />
 

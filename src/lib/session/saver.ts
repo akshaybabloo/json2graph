@@ -13,9 +13,17 @@ export class TabSaver {
 	#store: SessionStore;
 	#session: () => Session;
 	#onError: (message: string) => void;
-	#pending = new Map<number, { content: Blob; timer: ReturnType<typeof setTimeout> }>();
+	#pending = new Map<
+		number,
+		{ content: Blob; timer: ReturnType<typeof setTimeout>; version: number }
+	>();
 	/** Tabs whose content has changed since it was last saved. */
 	#unsaved = new Set<number>();
+	/** The latest content given for each tab with unsaved content, counted up across all tabs. */
+	#latest = new Map<number, number>();
+	#versions = 0;
+	/** Writes on their way to the store. */
+	#writing = 0;
 	/** Size of the content last saved for each tab. */
 	#sizes = new Map<number, number>();
 	#sessionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -34,9 +42,11 @@ export class TabSaver {
 	/** Saves `content` as what tab `id` holds, once it stops changing, or `now`. */
 	content(id: number, content: Blob, now = false) {
 		this.#unsaved.add(id);
+		const version = ++this.#versions;
+		this.#latest.set(id, version);
 		clearTimeout(this.#pending.get(id)?.timer);
 		const timer = setTimeout(() => this.#write(id), now ? 0 : CONTENT_DELAY);
-		this.#pending.set(id, { content, timer });
+		this.#pending.set(id, { content, timer, version });
 	}
 
 	/** Forgets tab `id` and its content. */
@@ -44,6 +54,7 @@ export class TabSaver {
 		clearTimeout(this.#pending.get(id)?.timer);
 		this.#pending.delete(id);
 		this.#unsaved.delete(id);
+		this.#latest.delete(id);
 		this.#sizes.delete(id);
 		this.#store.call({ method: 'deleteContent', id }).catch(() => {});
 	}
@@ -56,6 +67,11 @@ export class TabSaver {
 	/** Whether the content of tab `id` is saved as it is now. */
 	isSaved(id: number): boolean {
 		return this.#sizes.has(id) && !this.#unsaved.has(id);
+	}
+
+	/** Whether some content is waiting to be saved, or on its way. */
+	get busy(): boolean {
+		return this.#pending.size > 0 || this.#writing > 0;
 	}
 
 	sizeOf(id: number): number {
@@ -91,13 +107,21 @@ export class TabSaver {
 		this.#pending.delete(id);
 		clearTimeout(pending.timer);
 		this.#persist();
+		this.#writing += 1;
 		try {
 			await this.#store.call({ method: 'saveContent', id, content: pending.content });
 			this.#sizes.set(id, pending.content.size);
-			if (!this.#pending.has(id)) this.#unsaved.delete(id);
+			// Saved only once the latest content is: an older write can finish
+			// while a newer one is still on its way, and the newer one can fail.
+			if (this.#latest.get(id) === pending.version) {
+				this.#latest.delete(id);
+				this.#unsaved.delete(id);
+			}
 			this.session();
 		} catch (error) {
 			this.#onError(error instanceof Error ? error.message : String(error));
+		} finally {
+			this.#writing -= 1;
 		}
 	}
 

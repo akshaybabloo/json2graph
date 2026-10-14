@@ -88,8 +88,10 @@ export class JsonEditor {
 	#view: EditorView;
 	#extensions: Extension[];
 	#timer: ReturnType<typeof setTimeout> | undefined;
+	#onEdit: (text: string) => void;
 
 	constructor(parent: HTMLElement, { onEdit, onFormat, onEmpty }: EditorHandlers) {
+		this.#onEdit = onEdit;
 		this.#extensions = [
 			basicSetup,
 			json(),
@@ -129,6 +131,13 @@ export class JsonEditor {
 
 	get text(): string {
 		return this.#view.state.doc.toString();
+	}
+
+	/** Reports the edit that is waiting for typing to pause, at once. */
+	flush() {
+		if (this.#timer === undefined) return;
+		this.#cancel();
+		this.#onEdit(this.text);
 	}
 
 	/** Whether an edit is waiting for typing to pause before it is reported. */
