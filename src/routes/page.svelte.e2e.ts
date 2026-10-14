@@ -599,6 +599,69 @@ test.describe('tabs', () => {
 		await expect(page.locator('.cm-content')).toContainText('"name": "row-0"');
 	});
 
+	test('closes the other tabs, or all of them, from the menu at the start of the tabs', async ({
+		page
+	}) => {
+		const menu = page.getByRole('button', { name: 'Tab actions' });
+		await openFile(page, 'a.json', A);
+		await openFile(page, 'b.json', B);
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await page.getByRole('tab', { name: 'b.json' }).click();
+		await expect(page.getByText('4 nodes')).toBeVisible();
+
+		await menu.click();
+		await page.getByRole('menuitem', { name: 'Close other tabs' }).click();
+		await expect(page.getByRole('tab')).toHaveText(['b.json']);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+		await menu.click();
+		await expect(page.getByRole('menuitem', { name: 'Close other tabs' })).toBeDisabled();
+		await page.keyboard.press('Escape');
+
+		await openFile(page, 'a.json', A);
+		await menu.click();
+		await page.getByRole('menuitem', { name: 'Close all tabs' }).click();
+		await expect(page.getByRole('tab')).toHaveText(['Untitled']);
+		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+		await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
+		await expect
+			.poll(() => savedTabs(page), { timeout: 10_000 })
+			.toEqual([{ name: null, size: 0 }]);
+	});
+
+	test('renames and closes tabs from the menu of a tab', async ({ page }) => {
+		await openFile(page, 'a.json', A);
+		await openFile(page, 'b.json', B);
+		await openFile(page, 'c.json', A);
+		await expect(page.getByRole('tab')).toHaveText(['a.json', 'b.json', 'c.json']);
+
+		await page.getByRole('tab', { name: 'a.json' }).click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Rename' }).click();
+		// Gone before the next menu opens, rather than still fading out.
+		await expect(page.getByRole('menu')).toBeHidden();
+		const field = page.getByRole('textbox', { name: 'Name of the tab' });
+		await expect(field).toBeFocused();
+		await field.fill('first.json');
+		await field.press('Enter');
+		await expect(page.getByRole('tab')).toHaveText(['first.json', 'b.json', 'c.json']);
+
+		await page.getByRole('tab', { name: 'c.json' }).click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Close tab' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		await expect(page.getByRole('tab')).toHaveText(['first.json', 'b.json']);
+
+		// The other tabs are those other than the one clicked, which is shown.
+		await page.getByRole('tab', { name: 'first.json' }).click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Close other tabs' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		await expect(page.getByRole('tab')).toHaveText(['first.json']);
+		await expect(page.locator('.cm-content')).toHaveText(A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+
+		await page.getByRole('tab', { name: 'first.json' }).click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Close all tabs' }).click();
+		await expect(page.getByRole('tab')).toHaveText(['Untitled']);
+	});
+
 	test('closes a tab and shows the one next to it, and empties the last one', async ({ page }) => {
 		await openFile(page, 'a.json', A);
 		await openFile(page, 'b.json', B);

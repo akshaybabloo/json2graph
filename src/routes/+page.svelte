@@ -469,6 +469,32 @@
 		show();
 	}
 
+	/** Closes every tab but the one with this id, and shows it. */
+	function closeOthers(keep: number) {
+		for (const other of tabs) {
+			if (other.id === keep) continue;
+			controller?.discard(other.id);
+			saver?.remove(other.id);
+		}
+		tabs = tabs.filter((t) => t.id === keep);
+		if (keep === activeId) return;
+		readingText = null;
+		activeId = keep;
+		show();
+	}
+
+	/** Closes every tab, which leaves one empty tab in their place. */
+	function closeAll() {
+		for (const closed of tabs) {
+			controller?.discard(closed.id);
+			saver?.remove(closed.id);
+		}
+		readingText = null;
+		tabs = [newTab(++tabCount)];
+		activeId = tabCount;
+		show();
+	}
+
 	/** Opens a file into the tab on screen when that has nothing in it, and otherwise into a new tab. */
 	async function open(file: File) {
 		await sessionRestored;
@@ -667,6 +693,8 @@
 			controls="workspace"
 			onselect={selectTab}
 			onclose={closeTab}
+			oncloseothers={closeOthers}
+			oncloseall={closeAll}
 			onrename={(id, value) => {
 				const renamed = tabs.find((t) => t.id === id);
 				if (renamed) renamed.name = value;

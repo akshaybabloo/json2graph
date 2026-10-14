@@ -1,8 +1,14 @@
 <script lang="ts">
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import CopyXIcon from '@lucide/svelte/icons/copy-x';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SquareXIcon from '@lucide/svelte/icons/square-x';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { tick } from 'svelte';
 	import { buttonVariants } from '#lib/components/ui/button/index.js';
+	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { tabLabel, type Tab } from '#lib/workspace.js';
 
@@ -16,9 +22,22 @@
 		onclose: (id: number) => void;
 		onrename: (id: number, name: string) => void;
 		onnew: () => void;
+		/** Closes every tab but the one with this id, and shows it. */
+		oncloseothers: (keep: number) => void;
+		oncloseall: () => void;
 	};
 
-	let { tabs, active, controls, onselect, onclose, onrename, onnew }: Props = $props();
+	let {
+		tabs,
+		active,
+		controls,
+		onselect,
+		onclose,
+		onrename,
+		onnew,
+		oncloseothers,
+		oncloseall
+	}: Props = $props();
 
 	/** Id of the tab whose name is being edited. */
 	let renaming = $state<number | null>(null);
@@ -90,6 +109,32 @@
 </script>
 
 <div class="flex items-end gap-1 border-b bg-muted/40 px-2 pt-2">
+	<DropdownMenu.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<DropdownMenu.Trigger
+						{...props}
+						class={[buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'mb-0.5']}
+						aria-label="Tab actions"
+					>
+						<ChevronDownIcon />
+					</DropdownMenu.Trigger>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content>Tab actions</Tooltip.Content>
+		</Tooltip.Root>
+		<DropdownMenu.Content align="start" class="w-auto min-w-44">
+			<DropdownMenu.Item disabled={tabs.length < 2} onSelect={() => oncloseothers(active)}>
+				<CopyXIcon />
+				Close other tabs
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={oncloseall}>
+				<SquareXIcon />
+				Close all tabs
+			</DropdownMenu.Item>
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
 	<div
 		class="-mb-px flex min-w-0 items-end gap-1 overflow-x-auto"
 		role="tablist"
@@ -99,61 +144,83 @@
 	>
 		{#each tabs as tab (tab.id)}
 			{@const selected = tab.id === active}
-			<div
-				class={[
-					'flex h-9 shrink-0 items-center rounded-t-lg border border-b-0 text-sm',
-					selected
-						? 'bg-background text-foreground'
-						: 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground',
-					// Faded like a tab a browser has put to sleep.
-					tab.discarded && 'opacity-50 hover:opacity-100'
-				]}
-			>
-				{#if renaming === tab.id}
-					<input
-						{@attach focusAndSelect}
-						class="mr-2 ml-1.5 field-sizing-content h-7 max-w-56 min-w-16 rounded-sm border bg-background px-1.5 outline-ring focus-visible:outline-2"
-						aria-label="Name of the tab"
-						value={tabLabel(tab)}
-						onkeydown={(event) => onRenameKey(event, tab.id)}
-						onblur={(event) => finish(tab.id, event.currentTarget.value, false)}
-					/>
-				{:else}
-					<!-- After a pause, like the tooltip of a browser's tab. -->
-					<Tooltip.Root delayDuration={500}>
-						<Tooltip.Trigger
-							id="tab-{tab.id}"
-							class="h-full max-w-56 truncate rounded-tl-lg pr-2 pl-3 outline-ring focus-visible:outline-2"
-							role="tab"
-							aria-selected={selected}
-							aria-controls={selected ? controls : undefined}
-							tabindex={selected ? 0 : -1}
-							onclick={() => onselect(tab.id)}
-							ondblclick={() => (renaming = tab.id)}
-						>
-							{tabLabel(tab)}
-						</Tooltip.Trigger>
-						<Tooltip.Content side="bottom">
-							<div class="flex flex-col">
-								<span class="font-medium">{tabLabel(tab)}</span>
-								<span class="opacity-70">
-									{tab.discarded
-										? 'Freed to save memory, and read again when shown'
-										: 'Double-click to rename'}
-								</span>
-							</div>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-				<button
-					class="mr-2 grid size-5 place-items-center rounded-sm text-muted-foreground outline-ring hover:bg-muted hover:text-foreground focus-visible:outline-2"
-					aria-label="Close {tabLabel(tab)}"
-					tabindex={selected ? 0 : -1}
-					onclick={() => onclose(tab.id)}
+			<ContextMenu.Root>
+				<ContextMenu.Trigger
+					class={[
+						'flex h-9 shrink-0 items-center rounded-t-lg border border-b-0 text-sm',
+						selected
+							? 'bg-background text-foreground'
+							: 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground',
+						// Faded like a tab a browser has put to sleep.
+						tab.discarded && 'opacity-50 hover:opacity-100'
+					]}
 				>
-					<XIcon class="size-3.5" />
-				</button>
-			</div>
+					{#if renaming === tab.id}
+						<input
+							{@attach focusAndSelect}
+							class="mr-2 ml-1.5 field-sizing-content h-7 max-w-56 min-w-16 rounded-sm border bg-background px-1.5 outline-ring focus-visible:outline-2"
+							aria-label="Name of the tab"
+							value={tabLabel(tab)}
+							onkeydown={(event) => onRenameKey(event, tab.id)}
+							onblur={(event) => finish(tab.id, event.currentTarget.value, false)}
+						/>
+					{:else}
+						<!-- After a pause, like the tooltip of a browser's tab. -->
+						<Tooltip.Root delayDuration={500}>
+							<Tooltip.Trigger
+								id="tab-{tab.id}"
+								class="h-full max-w-56 truncate rounded-tl-lg pr-2 pl-3 outline-ring focus-visible:outline-2"
+								role="tab"
+								aria-selected={selected}
+								aria-controls={selected ? controls : undefined}
+								tabindex={selected ? 0 : -1}
+								onclick={() => onselect(tab.id)}
+								ondblclick={() => (renaming = tab.id)}
+							>
+								{tabLabel(tab)}
+							</Tooltip.Trigger>
+							<Tooltip.Content side="bottom">
+								<div class="flex flex-col">
+									<span class="font-medium">{tabLabel(tab)}</span>
+									<span class="opacity-70">
+										{tab.discarded
+											? 'Freed to save memory, and read again when shown'
+											: 'Double-click to rename'}
+									</span>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{/if}
+					<button
+						class="mr-2 grid size-5 place-items-center rounded-sm text-muted-foreground outline-ring hover:bg-muted hover:text-foreground focus-visible:outline-2"
+						aria-label="Close {tabLabel(tab)}"
+						tabindex={selected ? 0 : -1}
+						onclick={() => onclose(tab.id)}
+					>
+						<XIcon class="size-3.5" />
+					</button>
+				</ContextMenu.Trigger>
+				<!-- Focus stays where the chosen item puts it, such as in the field of a new name. -->
+				<ContextMenu.Content class="min-w-44" onCloseAutoFocus={(event) => event.preventDefault()}>
+					<ContextMenu.Item onSelect={() => (renaming = tab.id)}>
+						<PencilIcon />
+						Rename
+					</ContextMenu.Item>
+					<ContextMenu.Item onSelect={() => onclose(tab.id)}>
+						<XIcon />
+						Close tab
+					</ContextMenu.Item>
+					<ContextMenu.Separator />
+					<ContextMenu.Item disabled={tabs.length < 2} onSelect={() => oncloseothers(tab.id)}>
+						<CopyXIcon />
+						Close other tabs
+					</ContextMenu.Item>
+					<ContextMenu.Item onSelect={oncloseall}>
+						<SquareXIcon />
+						Close all tabs
+					</ContextMenu.Item>
+				</ContextMenu.Content>
+			</ContextMenu.Root>
 		{/each}
 	</div>
 	<Tooltip.Root>
