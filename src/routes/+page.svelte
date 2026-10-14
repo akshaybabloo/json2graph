@@ -18,6 +18,7 @@
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
+	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
@@ -28,6 +29,7 @@
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
+	import { newTab, toDiscard, type Tab } from '#lib/workspace.js';
 	import type { Pane } from 'paneforge';
 
 	/**
@@ -51,10 +53,20 @@
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
 	let sourcePane: Pane | undefined;
+	/** Counts reads of files, so that each tab knows which one it waits for. */
 	let opened = 0;
+	let tabCount = 1;
+	/** Counts the times a tab was shown, so that a read can tell it was hidden meanwhile. */
+	let shown = 0;
 
+	let tabs = $state<Tab[]>([newTab(1)]);
+	let activeId = $state(1);
+	/** The tab on screen. */
+	const tab = $derived(tabs.find((t) => t.id === activeId)!);
 	/** Name of the open file; none for a document that was typed. */
-	let name = $state<string | null>(null);
+	const name = $derived(tab.name);
+	/** Size of the open file when it is too large for the editor. */
+	const tooLarge = $derived(tab.file?.size ?? null);
 	/** Whether the editor has no text. */
 	let empty = $state(true);
 	/** Whether the editor's pane is collapsed, so only the graph shows. */
@@ -67,8 +79,6 @@
 	let allCollapsed = $state(false);
 	let progress = $state<{ label: string; fraction: number } | null>(null);
 	let error = $state<string | null>(null);
-	/** Size of the open file when it is too large for the editor. */
-	let tooLarge = $state<number | null>(null);
 	let dragging = $state(false);
 
 	const number = new Intl.NumberFormat();
@@ -142,9 +152,16 @@
 		progress = null;
 		if (event.type === 'ready') {
 			stats = event.stats;
-			allCollapsed = false;
-			error = null;
+			// A graph that was kept is as it was left.
+			if (!event.restored) {
+				allCollapsed = false;
+				error = null;
+			}
+			tab.indexed = true;
+			tab.bytes = event.stats.bytes;
 		} else {
+			// The last graph stays, kept for the tab, while the text is invalid.
+			tab.indexed = stats !== null;
 			error = event.message;
 			// The error is shown under the editor.
 			sourcePane?.expand();
@@ -153,8 +170,13 @@
 
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
-		if (text.trim() === '') clearGraph();
-		else controller?.load(new Blob([text]), { keepView: true });
+		if (text.trim() === '') {
+			clearGraph();
+			return;
+		}
+		// Until it is indexed, what the engine keeps is an older version.
+		tab.indexed = false;
+		controller?.load(tab.id, new Blob([text]), { keepView: true });
 	}
 
 	/** Re-indents the document in the editor. Text that is not JSON is left as it is. */
@@ -176,35 +198,123 @@
 		stats = null;
 		error = null;
 		progress = null;
-		controller?.clear();
+		tab.indexed = false;
+		controller?.clear(tab.id);
 	}
 
-	/** Empties the editor and the graph, ready for a new document. */
+	/** Empties the editor and the graph of the tab on screen, ready for a new document. */
 	function clear() {
 		// Abandon a file that is still being read.
-		opened += 1;
-		name = null;
-		tooLarge = null;
+		tab.reading = ++opened;
+		tab.name = null;
+		tab.file = null;
 		editor?.setText('');
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
 		if (!sourceHidden) editor?.focus();
 	}
 
+	/** Keeps what the tab on screen needs to be shown again later. */
+	function stash() {
+		if (!editor) return;
+		// A graph that is behind the text is not worth keeping.
+		if (editor.pending) tab.indexed = false;
+		if (!tab.indexed) controller?.discard(tab.id);
+		tab.saved = editor.state;
+		tab.view = controller?.view ?? tab.view;
+		tab.allCollapsed = allCollapsed;
+		tab.error = error;
+		tab.hiddenAt = Date.now();
+	}
+
+	/**
+	 * Puts the tab on screen into the editor, and its graph on the canvas: the
+	 * one the engine kept, or, when that was discarded, its document indexed again.
+	 */
+	function show() {
+		shown += 1;
+		editor?.restore(tab.saved ?? '');
+		tab.saved = null;
+		empty = editor?.empty ?? true;
+		stats = null;
+		progress = null;
+		error = tab.error;
+		allCollapsed = tab.allCollapsed;
+		controller?.show(tab.id, tab.view);
+		if (!tab.indexed) {
+			const text = tab.file ? null : (editor?.text ?? '');
+			if (tab.file) controller?.load(tab.id, tab.file, { view: tab.view });
+			else if (text?.trim()) controller?.load(tab.id, new Blob([text]), { view: tab.view });
+		}
+		discardIdle();
+	}
+
+	/** Frees the indexed documents of tabs left unused for a while, or beyond what is kept. */
+	function discardIdle() {
+		for (const hidden of toDiscard(tabs, activeId, Date.now())) {
+			hidden.indexed = false;
+			controller?.discard(hidden.id);
+		}
+	}
+
+	$effect(() => {
+		const timer = setInterval(discardIdle, 60 * 1000);
+		return () => clearInterval(timer);
+	});
+
+	function selectTab(id: number) {
+		if (id === activeId) return;
+		stash();
+		activeId = id;
+		show();
+	}
+
+	/** Opens an empty tab, and shows it. */
+	function addTab(): Tab {
+		stash();
+		tabs.push(newTab(++tabCount));
+		activeId = tabCount;
+		show();
+		return tab;
+	}
+
+	/** Closes a tab, and shows the one next to it. The last tab is emptied instead. */
+	function closeTab(id: number) {
+		if (tabs.length === 1) {
+			clear();
+			return;
+		}
+		const index = tabs.findIndex((t) => t.id === id);
+		tabs.splice(index, 1);
+		controller?.discard(id);
+		if (id !== activeId) return;
+		activeId = tabs[Math.min(index, tabs.length - 1)].id;
+		show();
+	}
+
+	/** Opens a file into the tab on screen when that has nothing in it, and otherwise into a new tab. */
 	async function open(file: File) {
-		const id = ++opened;
-		name = file.name;
+		const target = name === null && tooLarge === null && empty ? tab : addTab();
+		const id = (target.reading = ++opened);
+		const since = shown;
+		target.name = file.name;
 		error = null;
-		controller?.load(file);
+		controller?.load(target.id, file);
 		if (file.size > EDITOR_LIMIT) {
-			tooLarge = file.size;
+			target.file = file;
 			stats = null;
 			editor?.setText('');
 			return;
 		}
-		tooLarge = null;
 		const text = await file.text();
-		if (id === opened) editor?.setText(text);
+		if (target.reading !== id || !tabs.includes(target)) return;
+		if (target.id !== activeId) {
+			target.saved = text;
+			return;
+		}
+		editor?.setText(text);
+		// Shown again before its text was read, the tab has no graph yet.
+		if (shown !== since) controller?.load(target.id, new Blob([text]), { view: target.view });
 	}
 
 	/** Opens the sample document. */
@@ -355,8 +465,26 @@
 		</Button>
 	</header>
 
+	<WorkspaceTabs
+		{tabs}
+		active={activeId}
+		controls="workspace"
+		onselect={selectTab}
+		onclose={closeTab}
+		onnew={() => {
+			addTab();
+			if (!sourceHidden) editor?.focus();
+		}}
+	/>
+
 	<main class="flex min-h-0 flex-1">
-		<Resizable.PaneGroup direction="horizontal" class="min-h-0 flex-1">
+		<Resizable.PaneGroup
+			id="workspace"
+			direction="horizontal"
+			class="min-h-0 flex-1"
+			role="tabpanel"
+			aria-labelledby="tab-{activeId}"
+		>
 			<Resizable.Pane
 				bind:this={sourcePane}
 				defaultSize={28}

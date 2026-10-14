@@ -20,6 +20,9 @@ export const ZOOM_STEP = 1.4;
 /** How far one press of an arrow key moves the graph, in pixels. */
 const PAN_STEP = 80;
 
+/** Where the graph is panned and zoomed to: its offset on the canvas, and its scale. */
+export type View = { x: number; y: number; k: number };
+
 /**
  * Page-side half of the graph view: hands the canvas to the worker, and keeps
  * it informed of the canvas size, the theme, the pan/zoom transform and the
@@ -32,6 +35,8 @@ export class GraphController {
 	#stats: GraphStats | null = null;
 	#load = 0;
 	#keepView = false;
+	/** The view to show the graph being loaded in, rather than the starting one. */
+	#restoreView: View | null = null;
 	/** Exports waiting for their image, by request id. */
 	#exports = new Map<number, (blob: Blob | null) => void>();
 	#exported = 0;
@@ -71,7 +76,13 @@ export class GraphController {
 			if (message.id !== this.#load) return;
 			if (message.type === 'ready') {
 				this.#stats = message.stats;
-				if (!this.#keepView) this.home();
+				if (this.#restoreView) {
+					const { x, y, k } = this.#restoreView;
+					this.#limitZoom(this.#fitScale(message.stats));
+					this.#setView(x, y, k);
+				} else if (!this.#keepView) {
+					this.home();
+				}
 			}
 			onEvent(message);
 		});
@@ -177,23 +188,55 @@ export class GraphController {
 	}
 
 	/**
-	 * Replaces the current graph with the JSON in `data`. With `keepView` the
-	 * pan and zoom are left alone, which suits edits to the same document.
+	 * Replaces the graph of `tab`, which is on screen, with the JSON in `data`.
+	 * With `keepView` the pan and zoom are left alone, which suits edits to the
+	 * same document, and with `view` the graph is shown as it was when that
+	 * view was taken.
 	 */
-	load(data: Blob, { keepView = false } = {}) {
+	load(
+		tab: number,
+		data: Blob,
+		{ keepView = false, view = null }: { keepView?: boolean; view?: View | null } = {}
+	) {
 		// With no graph on screen there is no view to keep: the first one gets
 		// the starting view, like any newly opened document.
 		this.#keepView = keepView && this.#stats !== null;
+		this.#restoreView = view;
 		this.#load += 1;
-		this.#post({ type: 'load', id: this.#load, data });
+		this.#post({ type: 'load', id: this.#load, tab, data });
 	}
 
-	/** Removes the graph, abandoning any load still in progress. */
-	clear() {
+	/**
+	 * Shows the graph `tab` kept, in `view`, and abandons any load in progress.
+	 * Nothing is shown when the tab kept none: it needs a load.
+	 */
+	show(tab: number, view: View | null) {
+		this.#stats = null;
+		this.#keepView = false;
+		this.#restoreView = view;
+		this.#load += 1;
+		this.#canvas.style.cursor = '';
+		this.#post({ type: 'show', id: this.#load, tab });
+	}
+
+	/** Removes the graph of `tab`, which is on screen, abandoning any load still in progress. */
+	clear(tab: number) {
 		this.#stats = null;
 		this.#load += 1;
 		this.#canvas.style.cursor = '';
-		this.#post({ type: 'clear', id: this.#load });
+		this.#post({ type: 'clear', id: this.#load, tab });
+	}
+
+	/** Frees the graph of `tab`, which is not on screen. */
+	discard(tab: number) {
+		this.#post({ type: 'discard', tab });
+	}
+
+	/** Where the graph is panned and zoomed to, when there is one. */
+	get view(): View | null {
+		if (!this.#stats) return null;
+		const { x, y, k } = zoomTransform(this.#canvas);
+		return { x, y, k };
 	}
 
 	/** Zooms by `factor` around the centre of the canvas. */

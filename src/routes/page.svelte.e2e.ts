@@ -310,6 +310,115 @@ test.describe('before the script of the page has run', () => {
 	});
 });
 
+/** Opens a file with this name and text, as the Open file button does. */
+async function openFile(page: Page, name: string, text: string) {
+	await page.getByLabel('Open file').setInputFiles({
+		name,
+		mimeType: 'application/json',
+		buffer: Buffer.from(text)
+	});
+}
+
+test.describe('tabs', () => {
+	const A = '{"a": {"b": 1}}';
+	const B = '[{"x": 1}, {"y": 2}, {"z": 3}]';
+
+	test.beforeEach(async ({ page }) => {
+		// Once the page has started, so that it takes the files given to it.
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	test('opens each file in a tab of its own, and shows each one as it was', async ({ page }) => {
+		const tabs = page.getByRole('tab');
+		await expect(tabs).toHaveText(['Untitled']);
+
+		// The empty tab is used for the first file, and a new one for the next.
+		await openFile(page, 'a.json', A);
+		await expect(tabs).toHaveText(['a.json']);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await openFile(page, 'b.json', B);
+		await expect(tabs).toHaveText(['a.json', 'b.json']);
+		await expect(page.getByRole('tab', { name: 'b.json' })).toHaveAttribute(
+			'aria-selected',
+			'true'
+		);
+		await expect(page.locator('.cm-content')).toContainText('"z": 3');
+		await expect(page.getByText('4 nodes')).toBeVisible();
+
+		await page.getByRole('tab', { name: 'a.json' }).click();
+		await expect(page.locator('.cm-content')).toHaveText(A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', /tab-/);
+
+		// The arrow keys move between the tabs, and Enter shows one.
+		await page.getByRole('tab', { name: 'a.json' }).focus();
+		await page.keyboard.press('ArrowRight');
+		await expect(page.getByRole('tab', { name: 'b.json' })).toBeFocused();
+		await page.keyboard.press('Enter');
+		await expect(page.getByText('4 nodes')).toBeVisible();
+	});
+
+	test('keeps the graph of a hidden tab as it was left, until the tab is unused for a while', async ({
+		page
+	}) => {
+		await page.clock.install();
+		await page.goto('/');
+		// Once the page has started, so that it takes the file.
+		await expect(page.getByRole('status')).toBeHidden();
+		await openFile(page, 'a.json', A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+		await openFile(page, 'b.json', B);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+
+		// Kept: the nodes are still collapsed.
+		await page.getByRole('tab', { name: 'a.json' }).click();
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Expand all nodes' })).toBeVisible();
+
+		// Left for long enough, the tab is indexed again, with every node shown.
+		await page.getByRole('tab', { name: 'b.json' }).click();
+		await expect(page.getByText('4 nodes')).toBeVisible();
+		await page.clock.fastForward('11:00');
+		await page.getByRole('tab', { name: 'a.json' }).click();
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toBeVisible();
+	});
+
+	test('opens a new empty tab, and keeps the text and undo history of each', async ({ page }) => {
+		await replaceSource(page, '{"x": 1}');
+		await expect(page.getByText('1 node')).toBeVisible();
+
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await expect(page.getByRole('tab')).toHaveCount(2);
+		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+		await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
+
+		await page.getByRole('tab').first().click();
+		await expect(page.locator('.cm-content')).toHaveText('{"x": 1}');
+		await expect(page.getByText('1 node')).toBeVisible();
+		await page.locator('.cm-content').click();
+		await page.keyboard.press('ControlOrMeta+z');
+		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+	});
+
+	test('closes a tab and shows the one next to it, and empties the last one', async ({ page }) => {
+		await openFile(page, 'a.json', A);
+		await openFile(page, 'b.json', B);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+
+		await page.getByRole('button', { name: 'Close b.json' }).click();
+		await expect(page.getByRole('tab')).toHaveText(['a.json']);
+		await expect(page.locator('.cm-content')).toHaveText(A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+
+		await page.getByRole('button', { name: 'Close a.json' }).click();
+		await expect(page.getByRole('tab')).toHaveText(['Untitled']);
+		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+		await expect(page.getByText(/\d+ nodes?/)).toBeHidden();
+	});
+});
+
 test.describe('with the example open', () => {
 	test.beforeEach(async ({ page }) => {
 		await page.getByRole('button', { name: 'Example' }).click();
@@ -450,7 +559,7 @@ test.describe('with the example open', () => {
 			mimeType: 'application/json',
 			buffer: Buffer.from('[{"x": 1}, {"y": 2}]')
 		});
-		await expect(page.getByText('tiny.json')).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'tiny.json' })).toBeVisible();
 		await expect(page.getByText('3 nodes')).toBeVisible();
 		await expect(page.locator('.cm-content')).toContainText('[{"x": 1}, {"y": 2}]');
 	});
@@ -568,7 +677,7 @@ test.describe('with the example open', () => {
 		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
 
 		await page.getByRole('button', { name: 'Example' }).click();
-		await expect(page.getByText('sample.json')).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'sample.json' })).toBeVisible();
 		await expect(page.getByText('16 nodes')).toBeVisible();
 		await expect(page.locator('.cm-content')).toContainText('"name": "json2graph"');
 	});

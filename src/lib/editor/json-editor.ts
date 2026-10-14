@@ -1,7 +1,7 @@
 import { isolateHistory } from '@codemirror/commands';
 import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { Annotation } from '@codemirror/state';
+import { Annotation, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
@@ -86,39 +86,41 @@ export type EditorHandlers = {
 /** A CodeMirror editor for JSON that reports edits once typing pauses. */
 export class JsonEditor {
 	#view: EditorView;
+	#extensions: Extension[];
 	#timer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(parent: HTMLElement, { onEdit, onFormat, onEmpty }: EditorHandlers) {
-		this.#view = new EditorView({
-			parent,
-			extensions: [
-				basicSetup,
-				json(),
-				theme,
-				syntaxHighlighting(highlighting),
-				indentGuides,
-				EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
-				placeholder('Type or paste JSON here'),
-				keymap.of([{ key: 'Shift-Alt-f', run: () => (onFormat(), true) }]),
-				// Dropped files are opened by the page, not inserted as text.
-				EditorView.domEventHandlers({
-					drop: (event) => Boolean(event.dataTransfer?.files.length)
-				}),
-				EditorView.updateListener.of((update) => {
-					if (!update.docChanged) return;
-					const empty = update.state.doc.length === 0;
-					if (empty !== (update.startState.doc.length === 0)) onEmpty(empty);
-					if (update.transactions.some((tr) => tr.annotation(external))) return;
-					clearTimeout(this.#timer);
-					this.#timer = setTimeout(() => onEdit(this.#view.state.doc.toString()), EDIT_DELAY);
-				})
-			]
-		});
+		this.#extensions = [
+			basicSetup,
+			json(),
+			theme,
+			syntaxHighlighting(highlighting),
+			indentGuides,
+			EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
+			placeholder('Type or paste JSON here'),
+			keymap.of([{ key: 'Shift-Alt-f', run: () => (onFormat(), true) }]),
+			// Dropped files are opened by the page, not inserted as text.
+			EditorView.domEventHandlers({
+				drop: (event) => Boolean(event.dataTransfer?.files.length)
+			}),
+			EditorView.updateListener.of((update) => {
+				if (!update.docChanged) return;
+				const empty = update.state.doc.length === 0;
+				if (empty !== (update.startState.doc.length === 0)) onEmpty(empty);
+				if (update.transactions.some((tr) => tr.annotation(external))) return;
+				this.#cancel();
+				this.#timer = setTimeout(() => {
+					this.#timer = undefined;
+					onEdit(this.#view.state.doc.toString());
+				}, EDIT_DELAY);
+			})
+		];
+		this.#view = new EditorView({ parent, extensions: this.#extensions });
 	}
 
 	/** Replaces the document without reporting an edit. */
 	setText(text: string) {
-		clearTimeout(this.#timer);
+		this.#cancel();
 		this.#view.dispatch({
 			changes: { from: 0, to: this.#view.state.doc.length, insert: text },
 			annotations: external.of(true)
@@ -127,6 +129,33 @@ export class JsonEditor {
 
 	get text(): string {
 		return this.#view.state.doc.toString();
+	}
+
+	/** Whether an edit is waiting for typing to pause before it is reported. */
+	get pending(): boolean {
+		return this.#timer !== undefined;
+	}
+
+	get empty(): boolean {
+		return this.#view.state.doc.length === 0;
+	}
+
+	/** Everything the editor holds of its document: the text, the selection and the undo history. */
+	get state(): EditorState {
+		return this.#view.state;
+	}
+
+	/**
+	 * Shows another document, without reporting an edit: a state this editor
+	 * gave out, which brings back its selection and undo history, or a text.
+	 */
+	restore(saved: EditorState | string) {
+		this.#cancel();
+		this.#view.setState(
+			typeof saved === 'string'
+				? EditorState.create({ doc: saved, extensions: this.#extensions })
+				: saved
+		);
 	}
 
 	/**
@@ -143,12 +172,18 @@ export class JsonEditor {
 		});
 	}
 
+	/** Drops an edit that is waiting to be reported. */
+	#cancel() {
+		clearTimeout(this.#timer);
+		this.#timer = undefined;
+	}
+
 	focus() {
 		this.#view.focus();
 	}
 
 	destroy() {
-		clearTimeout(this.#timer);
+		this.#cancel();
 		this.#view.destroy();
 	}
 }
