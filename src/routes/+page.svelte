@@ -27,9 +27,20 @@
 	import { formatJson } from '#lib/format/format.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
+	import type { Session } from '#lib/session/protocol.js';
+	import { TabSaver } from '#lib/session/saver.js';
+	import { SessionStore } from '#lib/session/store.js';
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
-	import { newTab, toDiscard, type Tab } from '#lib/workspace.js';
+	import {
+		DROP_TEXT_OVER,
+		jsonBlob,
+		newTab,
+		tabLabel,
+		toDiscard,
+		type Tab
+	} from '#lib/workspace.js';
+	import { EditorState } from '@codemirror/state';
 	import type { Pane } from 'paneforge';
 
 	/**
@@ -53,6 +64,10 @@
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
 	let sourcePane: Pane | undefined;
+	/** Keeps the tabs over a reload; none in a window that leaves that to another. */
+	let saver: TabSaver | null = null;
+	/** Settles once the saved tabs are back, which comes before opening anything. */
+	let sessionRestored: Promise<void> = Promise.resolve();
 	/** Counts reads of files, so that each tab knows which one it waits for. */
 	let opened = 0;
 	let tabCount = 1;
@@ -67,6 +82,14 @@
 	const name = $derived(tab.name);
 	/** Size of the open file when it is too large for the editor. */
 	const tooLarge = $derived(tab.file?.size ?? null);
+	/** The saved text of the tab on screen while it is read back, before it is in the editor. */
+	let readingText = $state<Blob | null>(null);
+	/** Whether the saved tabs are being brought back, which the page waits for. */
+	let restoring = $state(false);
+	/** Whether this window keeps its tabs over a reload: a second window leaves that to the first. */
+	let keepsTabs = $state(true);
+	/** Why something could not be saved, when it could not. */
+	let saveError = $state<string | null>(null);
 	/** Whether the editor has no text. */
 	let empty = $state(true);
 	/** Whether the editor's pane is collapsed, so only the graph shows. */
@@ -170,13 +193,15 @@
 
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
+		const content = jsonBlob(text);
+		saver?.content(tab.id, content);
 		if (text.trim() === '') {
 			clearGraph();
 			return;
 		}
 		// Until it is indexed, what the engine keeps is an older version.
 		tab.indexed = false;
-		controller?.load(tab.id, new Blob([text]), { keepView: true });
+		controller?.load(tab.id, content, { keepView: true });
 	}
 
 	/** Re-indents the document in the editor. Text that is not JSON is left as it is. */
@@ -208,7 +233,10 @@
 		tab.reading = ++opened;
 		tab.name = null;
 		tab.file = null;
+		tab.lost = false;
+		readingText = null;
 		editor?.setText('');
+		saver?.content(tab.id, jsonBlob(''), true);
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
 		if (!sourceHidden) editor?.focus();
@@ -217,10 +245,16 @@
 	/** Keeps what the tab on screen needs to be shown again later. */
 	function stash() {
 		if (!editor) return;
+		if (editor.pending) {
+			// An edit that typing had not yet paused for: saved, but not indexed.
+			saver?.content(tab.id, jsonBlob(editor.text));
+			tab.indexed = false;
+		}
 		// A graph that is behind the text is not worth keeping.
-		if (editor.pending) tab.indexed = false;
 		if (!tab.indexed) controller?.discard(tab.id);
-		tab.saved = editor.state;
+		// Text still being read back stays where it is.
+		tab.saved = readingText ?? editor.state;
+		readingText = null;
 		tab.view = controller?.view ?? tab.view;
 		tab.allCollapsed = allCollapsed;
 		tab.error = error;
@@ -229,40 +263,179 @@
 
 	/**
 	 * Puts the tab on screen into the editor, and its graph on the canvas: the
-	 * one the engine kept, or, when that was discarded, its document indexed again.
+	 * one the engine kept, or, when that was discarded, its document indexed
+	 * again. Text left in the browser's storage is read back first.
 	 */
 	function show() {
-		shown += 1;
-		tab.discarded = false;
-		editor?.restore(tab.saved ?? '');
-		tab.saved = null;
-		empty = editor?.empty ?? true;
+		const showing = ++shown;
+		const current = tab;
+		current.discarded = false;
 		stats = null;
 		progress = null;
-		error = tab.error;
-		allCollapsed = tab.allCollapsed;
-		controller?.show(tab.id, tab.view);
-		if (!tab.indexed) {
-			const text = tab.file ? null : (editor?.text ?? '');
-			if (tab.file) controller?.load(tab.id, tab.file, { view: tab.view });
-			else if (text?.trim()) controller?.load(tab.id, new Blob([text]), { view: tab.view });
+		error = current.error;
+		allCollapsed = current.allCollapsed;
+		controller?.show(current.id, current.view);
+		const saved = current.saved;
+		current.saved = null;
+		if (saved instanceof Blob) {
+			readingText = saved;
+			editor?.restore('');
+			empty = true;
+			saved.text().then(
+				(text) => {
+					if (shown !== showing || readingText !== saved) return;
+					readingText = null;
+					editor?.restore(text);
+					empty = editor?.empty ?? true;
+					reindex();
+				},
+				() => {
+					if (shown !== showing) return;
+					readingText = null;
+					current.lost = true;
+				}
+			);
+		} else {
+			editor?.restore(saved ?? '');
+			empty = editor?.empty ?? true;
+			reindex();
 		}
 		discardIdle();
 	}
 
-	/** Frees the indexed documents of tabs left unused for a while, or beyond what is kept. */
+	/** Indexes the document of the tab on screen again, unless the engine kept it. */
+	function reindex() {
+		if (tab.indexed || tab.lost) return;
+		if (tab.file) {
+			controller?.load(tab.id, tab.file, { view: tab.view });
+			return;
+		}
+		const text = editor?.text ?? '';
+		if (text.trim()) controller?.load(tab.id, jsonBlob(text), { view: tab.view });
+	}
+
+	/**
+	 * Frees the indexed documents of tabs left unused for a while, or beyond
+	 * what is kept, and leaves their text in the browser's storage when it is large.
+	 */
 	function discardIdle() {
 		for (const hidden of toDiscard(tabs, activeId, Date.now())) {
 			hidden.indexed = false;
 			hidden.discarded = true;
 			controller?.discard(hidden.id);
+			dropText(hidden);
 		}
+	}
+
+	/** Lets go of the text of a hidden tab, once it is saved, in favour of the saved copy. */
+	function dropText(hidden: Tab) {
+		const state = hidden.saved;
+		if (!saver || !(state instanceof EditorState) || state.doc.length <= DROP_TEXT_OVER) return;
+		if (!saver.isSaved(hidden.id)) return;
+		saver.read(hidden.id).then((content) => {
+			// Unless it was shown or changed meanwhile.
+			if (content && hidden.saved === state) hidden.saved = content;
+		});
 	}
 
 	$effect(() => {
 		const timer = setInterval(discardIdle, 60 * 1000);
 		return () => clearInterval(timer);
 	});
+
+	/** The tabs as they are saved: their content is saved apart from this. */
+	function sessionNow(): Session {
+		return {
+			active: activeId,
+			tabs: tabs.map((t) => {
+				const view = t.id === activeId ? (controller?.view ?? t.view) : t.view;
+				return {
+					id: t.id,
+					name: t.name,
+					file: t.file !== null,
+					size: saver?.sizeOf(t.id) ?? 0,
+					view: view && { x: view.x, y: view.y, k: view.k }
+				};
+			})
+		};
+	}
+
+	/** Whenever a tab is opened, closed, renamed or shown, the list of tabs is saved. */
+	const sessionShape = $derived(
+		JSON.stringify([activeId, tabs.map((t) => [t.id, t.name, t.file !== null, t.lost])])
+	);
+	$effect(() => {
+		if (sessionShape) saver?.session();
+	});
+
+	$effect(() => {
+		let closed = false;
+		restoring = true;
+		sessionRestored = SessionStore.open().then(async (store) => {
+			if (closed) return store?.destroy();
+			if (!store) {
+				keepsTabs = false;
+				return;
+			}
+			saver = new TabSaver(store, sessionNow, (message) => (saveError = message));
+			const { session, contents } = await store.call({ method: 'load' });
+			if (closed) return;
+			if (session) restore(session, new Map(contents));
+			// Content that no tab holds any more.
+			for (const [id] of contents) if (!tabs.some((t) => t.id === id)) saver.remove(id);
+			saver.session();
+		});
+		sessionRestored.finally(() => (restoring = false)).catch(() => {});
+		return () => {
+			closed = true;
+			saver?.destroy();
+			saver = null;
+		};
+	});
+
+	/**
+	 * Brings back the saved tabs, each with its content left in the browser's
+	 * storage until it is shown. The empty tab the page starts with makes way
+	 * for them; anything opened before they were back stays, after them.
+	 */
+	function restore(session: Session, contents: Map<number, Blob>) {
+		const pristine =
+			tabs.length === 1 && name === null && tooLarge === null && empty && !readingText;
+		let next = Math.max(tabCount, ...session.tabs.map((record) => record.id));
+		const taken = new Set(pristine ? [] : tabs.map((t) => t.id));
+		const restored = session.tabs.map((record) => {
+			const content = contents.get(record.id) ?? null;
+			let id = record.id;
+			if (taken.has(id)) {
+				id = ++next;
+				if (content) saver?.content(id, content, true);
+			}
+			saver?.restored(id, record.size);
+			return {
+				...newTab(id),
+				name: record.name,
+				view: record.view,
+				file: record.file ? content : null,
+				saved: record.file ? null : content,
+				lost: content === null && record.size > 0
+			};
+		});
+		tabCount = next;
+		if (restored.length === 0) return;
+		if (!pristine) {
+			tabs.unshift(...restored);
+			return;
+		}
+		tabs = restored;
+		activeId = restored.some((t) => t.id === session.active) ? session.active : restored[0].id;
+		show();
+	}
+
+	/** Saves what is waiting to be saved: the page is being hidden, and may be closed. */
+	function flush() {
+		if (editor?.pending && !readingText) saver?.content(tab.id, jsonBlob(editor.text));
+		saver?.flush();
+	}
 
 	function selectTab(id: number) {
 		if (id === activeId) return;
@@ -289,18 +462,24 @@
 		const index = tabs.findIndex((t) => t.id === id);
 		tabs.splice(index, 1);
 		controller?.discard(id);
+		saver?.remove(id);
 		if (id !== activeId) return;
+		readingText = null;
 		activeId = tabs[Math.min(index, tabs.length - 1)].id;
 		show();
 	}
 
 	/** Opens a file into the tab on screen when that has nothing in it, and otherwise into a new tab. */
 	async function open(file: File) {
-		const target = name === null && tooLarge === null && empty ? tab : addTab();
+		await sessionRestored;
+		const reusable = name === null && tooLarge === null && empty && !readingText && !tab.lost;
+		const target = reusable ? tab : addTab();
 		const id = (target.reading = ++opened);
 		const since = shown;
 		target.name = file.name;
 		error = null;
+		// The file itself is kept: storing it does not read it on this thread.
+		saver?.content(target.id, jsonBlob(file), true);
 		controller?.load(target.id, file);
 		if (file.size > EDITOR_LIMIT) {
 			target.file = file;
@@ -316,7 +495,7 @@
 		}
 		editor?.setText(text);
 		// Shown again before its text was read, the tab has no graph yet.
-		if (shown !== since) controller?.load(target.id, new Blob([text]), { view: target.view });
+		if (shown !== since) controller?.load(target.id, jsonBlob(text), { view: target.view });
 	}
 
 	/** Opens the sample document. */
@@ -384,6 +563,13 @@
 		if (!event.relatedTarget) dragging = false;
 	}}
 	ondrop={onDrop}
+	onpagehide={flush}
+/>
+
+<svelte:document
+	onvisibilitychange={() => {
+		if (document.visibilityState === 'hidden') flush();
+	}}
 />
 
 <div class="flex h-dvh flex-col">
@@ -461,172 +647,206 @@
 		</Button>
 	</header>
 
-	<WorkspaceTabs
-		{tabs}
-		active={activeId}
-		controls="workspace"
-		onselect={selectTab}
-		onclose={closeTab}
-		onrename={(id, value) => {
-			const renamed = tabs.find((t) => t.id === id);
-			if (renamed) renamed.name = value;
-		}}
-		onnew={() => {
-			addTab();
-			if (!sourceHidden) editor?.focus();
-		}}
-	/>
-
-	<main class="flex min-h-0 flex-1">
-		<Resizable.PaneGroup
-			id="workspace"
-			direction="horizontal"
-			class="min-h-0 flex-1"
-			role="tabpanel"
-			aria-labelledby="tab-{activeId}"
-		>
-			<Resizable.Pane
-				bind:this={sourcePane}
-				defaultSize={28}
-				minSize={12}
-				maxSize={70}
-				collapsible
-				collapsedSize={0}
-				onCollapse={() => (sourceHidden = true)}
-				onExpand={() => (sourceHidden = false)}
+	<!-- The tabs and what they show, which wait for the saved tabs to be restored. -->
+	<div class="relative flex min-h-0 flex-1 flex-col" aria-busy={restoring}>
+		{#if restoring}
+			<!-- Faded in, so that it does not flash when there is little or nothing to restore. -->
+			<div
+				class="absolute inset-0 z-20 grid animate-in place-items-center bg-background text-sm duration-500 fade-in-0"
 			>
-				<section id="source" class="relative flex h-full flex-col" aria-label="JSON source">
-					<div class="min-h-0 flex-1" {@attach source}></div>
+				<p class="flex items-center gap-2 text-muted-foreground">
+					<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+					Restoring your tabs…
+				</p>
+			</div>
+		{/if}
 
-					{#if error}
-						<p class="border-t px-3 py-1.5 text-xs text-destructive" role="alert">{error}</p>
-					{/if}
+		<WorkspaceTabs
+			{tabs}
+			active={activeId}
+			controls="workspace"
+			onselect={selectTab}
+			onclose={closeTab}
+			onrename={(id, value) => {
+				const renamed = tabs.find((t) => t.id === id);
+				if (renamed) renamed.name = value;
+			}}
+			onnew={() => {
+				addTab();
+				if (!sourceHidden) editor?.focus();
+			}}
+		/>
 
-					{#if tooLarge !== null}
-						<div
-							class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
-						>
-							<p class="max-w-xs text-muted-foreground">
-								<span class="font-medium text-foreground">{name}</span> is {bytes(tooLarge)}, which
-								is too large to edit as text. The graph shows the whole file.
-							</p>
-						</div>
-					{/if}
-				</section>
-			</Resizable.Pane>
+		<main class="flex min-h-0 flex-1">
+			<Resizable.PaneGroup
+				id="workspace"
+				direction="horizontal"
+				class="min-h-0 flex-1"
+				role="tabpanel"
+				aria-labelledby="tab-{activeId}"
+			>
+				<Resizable.Pane
+					bind:this={sourcePane}
+					defaultSize={28}
+					minSize={12}
+					maxSize={70}
+					collapsible
+					collapsedSize={0}
+					onCollapse={() => (sourceHidden = true)}
+					onExpand={() => (sourceHidden = false)}
+				>
+					<section id="source" class="relative flex h-full flex-col" aria-label="JSON source">
+						<div class="min-h-0 flex-1" {@attach source}></div>
 
-			<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
+						{#if error}
+							<p class="border-t px-3 py-1.5 text-xs text-destructive" role="alert">{error}</p>
+						{/if}
 
-			<!-- Sized like the other pane: before the page's script runs, a pane has only this to go by. -->
-			<Resizable.Pane defaultSize={72}>
-				<section class="relative h-full" aria-label="Graph">
-					<!--
+						{#if readingText}
+							<div
+								class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
+								aria-busy="true"
+							>
+								<p class="flex items-center gap-2 text-muted-foreground">
+									<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+									Reading {tabLabel(tab)}…
+								</p>
+							</div>
+						{:else if tab.lost}
+							<div
+								class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
+							>
+								<p class="max-w-xs text-muted-foreground">
+									<span class="font-medium text-foreground">{tabLabel(tab)}</span> was not kept when the
+									page closed, so it cannot be shown. Open it again to see it.
+								</p>
+							</div>
+						{:else if tooLarge !== null}
+							<div
+								class="absolute inset-0 grid place-items-center bg-background p-6 text-center text-sm"
+							>
+								<p class="max-w-xs text-muted-foreground">
+									<span class="font-medium text-foreground">{name}</span> is {bytes(tooLarge)},
+									which is too large to edit as text. The graph shows the whole file.
+								</p>
+							</div>
+						{/if}
+					</section>
+				</Resizable.Pane>
+
+				<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
+
+				<!-- Sized like the other pane: before the page's script runs, a pane has only this to go by. -->
+				<Resizable.Pane defaultSize={72}>
+					<section class="relative h-full" aria-label="Graph">
+						<!--
 						The canvas takes the keys that move the view (see GraphController),
 						which no standard widget does: that is what the application role is for.
 					-->
-					<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
-					<canvas
-						{@attach graph}
-						id="graph"
-						class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
-						role="application"
-						tabindex="0"
-						aria-label={graphLabel}
-						aria-describedby="graph-help"
-					></canvas>
+						<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+						<canvas
+							{@attach graph}
+							id="graph"
+							class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
+							role="application"
+							tabindex="0"
+							aria-label={graphLabel}
+							aria-describedby="graph-help"
+						></canvas>
 
-					<div
-						class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
-						role="toolbar"
-						aria-label="Graph view"
-						aria-orientation="vertical"
-					>
-						{#each tools as tool (tool.label)}
+						<div
+							class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
+							role="toolbar"
+							aria-label="Graph view"
+							aria-orientation="vertical"
+						>
+							{#each tools as tool (tool.label)}
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									disabled={!stats}
+									aria-label={tool.label}
+									title={tool.label}
+									onclick={tool.run}
+								>
+									<tool.icon />
+								</Button>
+							{/each}
 							<Button
 								variant="ghost"
 								size="icon-sm"
 								disabled={!stats}
-								aria-label={tool.label}
-								title={tool.label}
-								onclick={tool.run}
+								aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+								title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+								onclick={toggleAll}
 							>
-								<tool.icon />
-							</Button>
-						{/each}
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							disabled={!stats}
-							aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-							title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-							onclick={toggleAll}
-						>
-							{#if allCollapsed}
-								<ChevronsUpDownIcon />
-							{:else}
-								<ChevronsDownUpIcon />
-							{/if}
-						</Button>
-						<ExportMenu disabled={!stats} onexport={exportImage} />
-					</div>
-
-					{#if progress}
-						<div
-							class="absolute inset-x-0 top-0 h-1 bg-muted"
-							role="progressbar"
-							aria-label={progress.label}
-							aria-valuemin={0}
-							aria-valuemax={100}
-							aria-valuenow={Math.round(progress.fraction * 100)}
-						>
-							<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
-						</div>
-					{/if}
-
-					{#if engineError !== null}
-						<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
-							<p class="max-w-sm text-destructive" role="alert">
-								The graph engine could not be loaded, so no graph can be drawn: {engineError}.
-								Reload the page to try again.
-							</p>
-						</div>
-					{:else if !engineReady}
-						<p
-							class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
-							role="status"
-						>
-							<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
-							Loading the graph engine…
-						</p>
-					{:else if !stats && !progress && !error && tooLarge === null}
-						<div
-							class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
-						>
-							<p class="max-w-xs text-muted-foreground">
-								{#if sourceHidden}
-									Open a file, or drop one anywhere on the page.
+								{#if allCollapsed}
+									<ChevronsUpDownIcon />
 								{:else}
-									Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+									<ChevronsDownUpIcon />
 								{/if}
-								<span class="font-medium text-foreground">Example</span> loads a sample document.
-							</p>
+							</Button>
+							<ExportMenu disabled={!stats} onexport={exportImage} />
 						</div>
-					{/if}
 
-					<p
-						id="graph-help"
-						class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
-					>
-						Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide the
-						next one · click a shortened value to expand it
-						<span class="sr-only">
-							With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the graph.
-						</span>
-					</p>
-				</section>
-			</Resizable.Pane>
-		</Resizable.PaneGroup>
-	</main>
+						{#if progress}
+							<div
+								class="absolute inset-x-0 top-0 h-1 bg-muted"
+								role="progressbar"
+								aria-label={progress.label}
+								aria-valuemin={0}
+								aria-valuemax={100}
+								aria-valuenow={Math.round(progress.fraction * 100)}
+							>
+								<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
+							</div>
+						{/if}
+
+						{#if engineError !== null}
+							<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
+								<p class="max-w-sm text-destructive" role="alert">
+									The graph engine could not be loaded, so no graph can be drawn: {engineError}.
+									Reload the page to try again.
+								</p>
+							</div>
+						{:else if !engineReady}
+							<p
+								class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
+								role="status"
+							>
+								<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+								Loading the graph engine…
+							</p>
+						{:else if !stats && !progress && !error && tooLarge === null && !readingText && !tab.lost}
+							<div
+								class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
+							>
+								<p class="max-w-xs text-muted-foreground">
+									{#if sourceHidden}
+										Open a file, or drop one anywhere on the page.
+									{:else}
+										Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+									{/if}
+									<span class="font-medium text-foreground">Example</span> loads a sample document.
+								</p>
+							</div>
+						{/if}
+
+						<p
+							id="graph-help"
+							class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+						>
+							Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide the
+							next one · click a shortened value to expand it
+							<span class="sr-only">
+								With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the graph.
+							</span>
+						</p>
+					</section>
+				</Resizable.Pane>
+			</Resizable.PaneGroup>
+		</main>
+	</div>
 
 	<footer class="flex items-center gap-2 border-t px-2 py-1 text-xs">
 		<Tooltip.Root>
@@ -645,6 +865,15 @@
 			</Tooltip.Trigger>
 			<Tooltip.Content>{sourceHidden ? 'Show editor' : 'Hide editor'}</Tooltip.Content>
 		</Tooltip.Root>
+		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
+			{#if saveError}
+				<span class="text-destructive">Some tabs could not be kept: {saveError}</span>
+			{:else if keepsTabs}
+				Tabs are kept in this browser until you close them
+			{:else}
+				Tabs in this window are not kept, because another window keeps its own
+			{/if}
+		</p>
 	</footer>
 
 	{#if dragging}

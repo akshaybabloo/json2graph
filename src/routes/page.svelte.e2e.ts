@@ -182,6 +182,14 @@ test('shows a file too large for the editor as a graph only, with nothing to for
 	await expect(page.getByText(/1 node · 107 values/)).toBeVisible();
 	await expect(format).toBeDisabled();
 
+	// The file is kept over a reload, although its text is not in the editor.
+	await expect
+		.poll(async () => (await savedTabs(page))?.[1]?.size, { timeout: 30_000 })
+		.toBeGreaterThan(100_000_000);
+	await page.reload();
+	await expect(page.getByText(/too large to edit as text/)).toBeVisible();
+	await expect(page.getByText(/1 node · 107 values/)).toBeVisible({ timeout: 15_000 });
+
 	// The file is still open, so it can be cleared.
 	await expect(clear).toBeEnabled();
 	await clear.click();
@@ -319,6 +327,53 @@ async function openFile(page: Page, name: string, text: string) {
 	});
 }
 
+/**
+ * The tabs as saved in the browser's storage: their names, and the size of
+ * the content saved for each. Null until something is saved.
+ */
+async function savedTabs(page: Page) {
+	return page.evaluate(
+		() =>
+			new Promise<{ name: string | null; size: number }[] | null>((resolve, reject) => {
+				const open = indexedDB.open('json2graph');
+				// Not created here: the page's worker creates it.
+				open.onupgradeneeded = () => open.transaction?.abort();
+				open.onerror = () => resolve(null);
+				open.onsuccess = () => {
+					const database = open.result;
+					const read = database.transaction('session').objectStore('session').get('tabs');
+					read.onsuccess = () => {
+						database.close();
+						const session = read.result as
+							{ tabs: { name: string | null; size: number }[] } | undefined;
+						resolve(session ? session.tabs.map(({ name, size }) => ({ name, size })) : null);
+					};
+					read.onerror = () => reject(read.error);
+				};
+			})
+	);
+}
+
+/** The types of the contents saved in the browser's storage. */
+async function savedTypes(page: Page) {
+	return page.evaluate(
+		() =>
+			new Promise<string[]>((resolve, reject) => {
+				const open = indexedDB.open('json2graph');
+				open.onerror = () => reject(open.error);
+				open.onsuccess = () => {
+					const database = open.result;
+					const read = database.transaction('content').objectStore('content').getAll();
+					read.onsuccess = () => {
+						database.close();
+						resolve((read.result as Blob[]).map((content) => content.type));
+					};
+					read.onerror = () => reject(read.error);
+				};
+			})
+	);
+}
+
 test.describe('tabs', () => {
 	const A = '{"a": {"b": 1}}';
 	const B = '[{"x": 1}, {"y": 2}, {"z": 3}]';
@@ -436,6 +491,112 @@ test.describe('tabs', () => {
 		await field.fill('kept.json');
 		await page.locator('canvas').click();
 		await expect(page.getByRole('tab')).toHaveText(['kept.json']);
+	});
+
+	test('keeps the tabs over a reload, with what was typed in them', async ({ page }) => {
+		await openFile(page, 'a.json', A);
+		await openFile(page, 'b.json', B);
+		await page.getByRole('tab', { name: 'b.json' }).dblclick();
+		await page.getByRole('textbox', { name: 'Name of the tab' }).fill('renamed.json');
+		await page.keyboard.press('Enter');
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await replaceSource(page, '{"typed": true}');
+		await expect(page.getByText('1 node')).toBeVisible();
+		await page.getByRole('tab', { name: 'a.json' }).click();
+		await expect
+			.poll(() => savedTabs(page), { timeout: 10_000 })
+			.toEqual([
+				{ name: 'a.json', size: A.length },
+				{ name: 'renamed.json', size: B.length },
+				{ name: null, size: '{"typed": true}'.length }
+			]);
+
+		expect(await savedTypes(page)).toEqual(Array(3).fill('application/json'));
+
+		// The page says it is restoring the tabs until it has: here, until the
+		// workers it waits for are let through.
+		let release = () => {};
+		const released = new Promise<void>((resolve) => (release = resolve));
+		await page.route('**/workers/worker-*.js', async (route) => {
+			await released;
+			await route.continue();
+		});
+		await page.reload();
+		await expect(page.getByText('Restoring your tabs…')).toBeVisible();
+		release();
+		await expect(page.getByText('Restoring your tabs…')).toBeHidden();
+		await expect(page.getByRole('tab')).toHaveText(['a.json', 'renamed.json', 'Untitled']);
+		await expect(page.getByRole('tab', { name: 'a.json' })).toHaveAttribute(
+			'aria-selected',
+			'true'
+		);
+		await expect(page.locator('.cm-content')).toHaveText(A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await page.getByRole('tab', { name: 'renamed.json' }).click();
+		await expect(page.locator('.cm-content')).toContainText('"z": 3');
+		await expect(page.getByText('4 nodes')).toBeVisible();
+		await page.getByRole('tab', { name: 'Untitled' }).click();
+		await expect(page.locator('.cm-content')).toHaveText('{"typed": true}');
+		await expect(
+			page.getByText('Tabs are kept in this browser until you close them')
+		).toBeVisible();
+	});
+
+	test('forgets a closed tab', async ({ page }) => {
+		await openFile(page, 'a.json', A);
+		await openFile(page, 'b.json', B);
+		await page.getByRole('button', { name: 'Close a.json' }).click();
+		await expect
+			.poll(() => savedTabs(page), { timeout: 10_000 })
+			.toEqual([{ name: 'b.json', size: B.length }]);
+
+		await page.reload();
+		await expect(page.getByRole('tab')).toHaveText(['b.json']);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+	});
+
+	test('leaves the tabs to the first window when a second one is open', async ({
+		page,
+		context
+	}) => {
+		await openFile(page, 'a.json', A);
+		await expect.poll(() => savedTabs(page)).toEqual([{ name: 'a.json', size: A.length }]);
+
+		const second = await context.newPage();
+		await second.goto('/');
+		await expect(second.getByRole('status')).toBeHidden();
+		await expect(second.getByRole('tab')).toHaveText(['Untitled']);
+		await expect(second.getByText(/another window keeps its own/)).toBeVisible();
+		await openFile(second, 'b.json', B);
+		await expect(second.getByText('4 nodes')).toBeVisible();
+
+		// The second window saved nothing over the first one's tabs.
+		await page.reload();
+		await expect(page.getByRole('tab')).toHaveText(['a.json']);
+	});
+
+	test('reads the large text of a tab left unused back from storage when it is shown', async ({
+		page
+	}) => {
+		await page.clock.install();
+		await page.goto('/');
+		await expect(page.getByRole('status')).toBeHidden();
+		const rows = Array.from({ length: 25_000 }, (_, i) => ({ id: i, name: `row-${i}` }));
+		const large = JSON.stringify(rows, null, 2);
+		expect(large.length).toBeGreaterThan(1_000_000);
+		await openFile(page, 'rows.json', large);
+		await expect(page.getByText('25,001 nodes')).toBeVisible();
+		await openFile(page, 'b.json', B);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+
+		await page.clock.fastForward('11:00');
+		await page.getByRole('tab', { name: 'rows.json' }).click();
+		await expect(page.getByText('25,001 nodes')).toBeVisible();
+		await expect(page.locator('.cm-content')).toContainText('"name": "row-0"');
+		// Read back, the text has no undo history: undoing does not take away the file.
+		await page.locator('.cm-content').click();
+		await page.keyboard.press('ControlOrMeta+z');
+		await expect(page.locator('.cm-content')).toContainText('"name": "row-0"');
 	});
 
 	test('closes a tab and shows the one next to it, and empties the last one', async ({ page }) => {

@@ -10,9 +10,15 @@ export type Tab = {
 	/** Name of the file it was opened from; none for a document that was typed. */
 	name: string | null;
 	/** A file too large for the editor, which the graph is drawn from instead. */
-	file: File | null;
-	/** The editor's state while another tab is on screen, or a text that was read meanwhile. */
-	saved: EditorState | string | null;
+	file: Blob | null;
+	/**
+	 * Its text while another tab is on screen: the editor's state, a text that
+	 * was read meanwhile, or the copy in the browser's storage, which is read
+	 * only when the tab is shown.
+	 */
+	saved: EditorState | string | Blob | null;
+	/** Whether its content was not kept when the page was closed, so that it cannot be shown. */
+	lost: boolean;
 	/** Where its graph was panned and zoomed to when another tab was shown. */
 	view: View | null;
 	/** Whether every node was last collapsed, rather than shown. */
@@ -40,6 +46,7 @@ export function newTab(id: number): Tab {
 		name: null,
 		file: null,
 		saved: null,
+		lost: false,
 		view: null,
 		allCollapsed: false,
 		error: null,
@@ -51,6 +58,15 @@ export function newTab(id: number): Tab {
 	};
 }
 
+/** The type of the content of a tab, as it is saved. */
+const JSON_TYPE = 'application/json';
+
+/** Content as it is saved and indexed: a blob that says it is JSON. A file is not copied. */
+export function jsonBlob(content: string | Blob): Blob {
+	if (content instanceof Blob && content.type === JSON_TYPE) return content;
+	return new Blob([content], { type: JSON_TYPE });
+}
+
 /** What a tab is called on screen. */
 export function tabLabel(tab: Tab): string {
 	return tab.name ?? 'Untitled';
@@ -60,6 +76,12 @@ export function tabLabel(tab: Tab): string {
 export const DISCARD_AFTER = 10 * 60 * 1000;
 /** How much JSON the hidden tabs keep indexed between them; the least recently used go first. */
 export const KEEP_LIMIT = 512 * 1024 * 1024;
+/**
+ * Above this many characters, the text of a tab whose graph was discarded is
+ * left in the browser's storage too, and read back when the tab is shown.
+ * Below it the text stays, with its undo history.
+ */
+export const DROP_TEXT_OVER = 1_000_000;
 
 /**
  * The hidden tabs whose indexed documents should be freed: those hidden for
