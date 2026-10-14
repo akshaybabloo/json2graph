@@ -63,6 +63,12 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	// The skip link is the first stop of the page.
 	await page.keyboard.press('Tab');
 	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
+
+	// With the editor hidden, the page does not point to it.
+	await page.getByRole('button', { name: 'Hide editor' }).click();
+	await expect(page.getByText('Open a file, or drop one anywhere on the page.')).toBeVisible();
+	await page.getByRole('button', { name: 'Show editor' }).click();
+	await expect(page.getByText(/Type or paste JSON on the left/)).toBeVisible();
 });
 
 test('shows the version it was built as, and links it to the release', async ({ page }) => {
@@ -218,16 +224,19 @@ test('collapses every node into the root, and expands them all again', async ({ 
 
 	await page.getByRole('button', { name: 'Collapse all nodes' }).click();
 	await away();
-	const root = await graphShot(page);
-	expect(root.equals(whole)).toBe(false);
+	expect((await graphShot(page)).equals(whole)).toBe(false);
 
-	// A second time changes nothing, and expanding gives the first graph back.
-	await page.getByRole('button', { name: 'Collapse all nodes' }).click();
-	await away();
-	expect((await graphShot(page)).equals(root)).toBe(true);
+	// The same button now expands them, which gives the first graph back.
 	await page.getByRole('button', { name: 'Expand all nodes' }).click();
 	await away();
 	expect((await graphShot(page)).equals(whole)).toBe(true);
+
+	// A new document starts with every node shown.
+	await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+	await expect(page.getByRole('button', { name: 'Expand all nodes' })).toBeVisible();
+	await replaceSource(page, '{"a": {"b": 1}}');
+	await expect(page.getByText('2 nodes')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toBeVisible();
 });
 
 test('undoes formatting without undoing what was typed just before it', async ({ page }) => {
@@ -397,6 +406,42 @@ test.describe('with the example open', () => {
 		await replaceSource(page, '{"a": 1}');
 		await expect(page.getByRole('alert')).toBeHidden();
 		await expect(page.getByText('· 1 node ·')).toBeVisible();
+	});
+
+	test('hides the editor so the graph takes the whole width, and shows it again', async ({
+		page
+	}) => {
+		const source = page.getByRole('region', { name: 'JSON source' });
+		const canvas = page.locator('canvas');
+		const width = (await canvas.boundingBox())!.width;
+
+		const hide = page.getByRole('button', { name: 'Hide editor' });
+		await hide.hover();
+		await expect(page.locator('[data-slot=tooltip-content]')).toHaveText('Hide editor');
+		await hide.click();
+		await expect(source).toBeHidden();
+		await expect.poll(async () => (await canvas.boundingBox())!.width).toBeGreaterThan(width);
+
+		const show = page.getByRole('button', { name: 'Show editor' });
+		await expect(show).toHaveAttribute('aria-expanded', 'false');
+		await show.click();
+		await expect(source).toBeVisible();
+		await expect.poll(async () => (await canvas.boundingBox())!.width).toBe(width);
+		await expect(page.getByRole('button', { name: 'Hide editor' })).toHaveAttribute(
+			'aria-expanded',
+			'true'
+		);
+	});
+
+	test('shows the hidden editor when an opened file is not JSON, to say why', async ({ page }) => {
+		await page.getByRole('button', { name: 'Hide editor' }).click();
+		await page.getByLabel('Open file').setInputFiles({
+			name: 'broken.json',
+			mimeType: 'application/json',
+			buffer: Buffer.from('{"a": }')
+		});
+		await expect(page.getByRole('region', { name: 'JSON source' })).toBeVisible();
+		await expect(page.getByRole('alert')).toContainText('line 1');
 	});
 
 	test('opens a file into the editor and the graph', async ({ page }) => {

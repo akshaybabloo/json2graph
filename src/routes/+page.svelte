@@ -8,6 +8,8 @@
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize';
 	import MoonIcon from '@lucide/svelte/icons/moon';
+	import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
+	import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
@@ -19,12 +21,14 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
 	import { formatJson } from '#lib/format/format.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
+	import type { Pane } from 'paneforge';
 
 	/**
 	 * Larger files are shown as a graph only. The editor draws just the lines on
@@ -46,16 +50,21 @@
 
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
+	let sourcePane: Pane | undefined;
 	let opened = 0;
 
 	/** Name of the open file; none for a document that was typed. */
 	let name = $state<string | null>(null);
 	/** Whether the editor has no text. */
 	let empty = $state(true);
+	/** Whether the editor's pane is collapsed, so only the graph shows. */
+	let sourceHidden = $state(false);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
 	let engineReady = $state(false);
 	let engineError = $state<string | null>(null);
 	let stats = $state<GraphStats | null>(null);
+	/** Whether every node was last collapsed, rather than shown. A new graph shows them all. */
+	let allCollapsed = $state(false);
 	let progress = $state<{ label: string; fraction: number } | null>(null);
 	let error = $state<string | null>(null);
 	/** Size of the open file when it is too large for the editor. */
@@ -133,9 +142,12 @@
 		progress = null;
 		if (event.type === 'ready') {
 			stats = event.stats;
+			allCollapsed = false;
 			error = null;
 		} else {
 			error = event.message;
+			// The error is shown under the editor.
+			sourcePane?.expand();
 		}
 	}
 
@@ -176,7 +188,7 @@
 		editor?.setText('');
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
-		editor?.focus();
+		if (!sourceHidden) editor?.focus();
 	}
 
 	async function open(file: File) {
@@ -240,18 +252,13 @@
 	const tools = [
 		{ label: 'Zoom in', icon: ZoomInIcon, run: () => controller?.zoomBy(ZOOM_STEP) },
 		{ label: 'Zoom out', icon: ZoomOutIcon, run: () => controller?.zoomBy(1 / ZOOM_STEP) },
-		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() },
-		{
-			label: 'Collapse all nodes',
-			icon: ChevronsDownUpIcon,
-			run: () => controller?.collapseAll(true)
-		},
-		{
-			label: 'Expand all nodes',
-			icon: ChevronsUpDownIcon,
-			run: () => controller?.collapseAll(false)
-		}
+		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() }
 	];
+
+	function toggleAll() {
+		allCollapsed = !allCollapsed;
+		controller?.collapseAll(allCollapsed);
+	}
 </script>
 
 <svelte:head>
@@ -350,8 +357,17 @@
 
 	<main class="flex min-h-0 flex-1">
 		<Resizable.PaneGroup direction="horizontal" class="min-h-0 flex-1">
-			<Resizable.Pane defaultSize={28} minSize={12} maxSize={70}>
-				<section class="relative flex h-full flex-col" aria-label="JSON source">
+			<Resizable.Pane
+				bind:this={sourcePane}
+				defaultSize={28}
+				minSize={12}
+				maxSize={70}
+				collapsible
+				collapsedSize={0}
+				onCollapse={() => (sourceHidden = true)}
+				onExpand={() => (sourceHidden = false)}
+			>
+				<section id="source" class="relative flex h-full flex-col" aria-label="JSON source">
 					<div class="min-h-0 flex-1" {@attach source}></div>
 
 					{#if error}
@@ -409,6 +425,20 @@
 								<tool.icon />
 							</Button>
 						{/each}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							disabled={!stats}
+							aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+							title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+							onclick={toggleAll}
+						>
+							{#if allCollapsed}
+								<ChevronsUpDownIcon />
+							{:else}
+								<ChevronsDownUpIcon />
+							{/if}
+						</Button>
 						<ExportMenu disabled={!stats} onexport={exportImage} />
 					</div>
 
@@ -445,7 +475,11 @@
 							class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
 						>
 							<p class="max-w-xs text-muted-foreground">
-								Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+								{#if sourceHidden}
+									Open a file, or drop one anywhere on the page.
+								{:else}
+									Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+								{/if}
 								<span class="font-medium text-foreground">Example</span> loads a sample document.
 							</p>
 						</div>
@@ -465,6 +499,25 @@
 			</Resizable.Pane>
 		</Resizable.PaneGroup>
 	</main>
+
+	<footer class="flex items-center gap-2 border-t px-2 py-1 text-xs">
+		<Tooltip.Root>
+			<Tooltip.Trigger
+				class={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
+				aria-label={sourceHidden ? 'Show editor' : 'Hide editor'}
+				aria-controls="source"
+				aria-expanded={!sourceHidden}
+				onclick={() => (sourceHidden ? sourcePane?.expand() : sourcePane?.collapse())}
+			>
+				{#if sourceHidden}
+					<PanelLeftOpenIcon />
+				{:else}
+					<PanelLeftCloseIcon />
+				{/if}
+			</Tooltip.Trigger>
+			<Tooltip.Content>{sourceHidden ? 'Show editor' : 'Hide editor'}</Tooltip.Content>
+		</Tooltip.Root>
+	</footer>
 
 	{#if dragging}
 		<div

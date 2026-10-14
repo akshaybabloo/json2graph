@@ -2,6 +2,7 @@
 	import './layout.css';
 	import { asset } from '$app/paths';
 	import favicon from '#lib/assets/favicon.svg';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { SITE } from '#lib/site.js';
 	import type { LayoutProps } from './$types';
 
@@ -50,4 +51,6 @@
 	{@html `<script type="application/ld+json">${structured}</` + 'script>'}
 </svelte:head>
 
-{@render children()}
+<Tooltip.Provider>
+	{@render children()}
+</Tooltip.Provider>
