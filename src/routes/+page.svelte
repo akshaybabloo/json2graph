@@ -233,6 +233,7 @@
 	 */
 	function show() {
 		shown += 1;
+		tab.discarded = false;
 		editor?.restore(tab.saved ?? '');
 		tab.saved = null;
 		empty = editor?.empty ?? true;
@@ -253,6 +254,7 @@
 	function discardIdle() {
 		for (const hidden of toDiscard(tabs, activeId, Date.now())) {
 			hidden.indexed = false;
+			hidden.discarded = true;
 			controller?.discard(hidden.id);
 		}
 	}

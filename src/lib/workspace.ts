@@ -24,6 +24,8 @@ export type Tab = {
 	 * once and as it was left. Otherwise showing it indexes the document again.
 	 */
 	indexed: boolean;
+	/** Whether its indexed document was freed while it was hidden, to save memory. */
+	discarded: boolean;
 	/** Size of the document the engine keeps. */
 	bytes: number;
 	/** When another tab was last shown in its place, in milliseconds since the epoch. */
@@ -42,6 +44,7 @@ export function newTab(id: number): Tab {
 		allCollapsed: false,
 		error: null,
 		indexed: false,
+		discarded: false,
 		bytes: 0,
 		hiddenAt: 0,
 		reading: 0

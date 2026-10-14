@@ -68,7 +68,9 @@
 					'flex h-9 shrink-0 items-center rounded-t-lg border border-b-0 text-sm',
 					selected
 						? 'bg-background text-foreground'
-						: 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground'
+						: 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground',
+					// Faded like a tab a browser has put to sleep.
+					tab.discarded && 'opacity-50 hover:opacity-100'
 				]}
 			>
 				<button
@@ -78,7 +80,9 @@
 					aria-selected={selected}
 					aria-controls={selected ? controls : undefined}
 					tabindex={selected ? 0 : -1}
-					title={tabLabel(tab)}
+					title={tab.discarded
+						? `${tabLabel(tab)}: freed to save memory, and read again when shown`
+						: tabLabel(tab)}
 					onclick={() => onselect(tab.id)}
 				>
 					{tabLabel(tab)}

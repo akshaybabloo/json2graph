@@ -380,7 +380,12 @@ test.describe('tabs', () => {
 		await page.getByRole('tab', { name: 'b.json' }).click();
 		await expect(page.getByText('4 nodes')).toBeVisible();
 		await page.clock.fastForward('11:00');
+		await expect(page.getByRole('tab', { name: 'a.json' })).toHaveAttribute(
+			'title',
+			/freed to save memory/
+		);
 		await page.getByRole('tab', { name: 'a.json' }).click();
+		await expect(page.getByRole('tab', { name: 'a.json' })).toHaveAttribute('title', 'a.json');
 		await expect(page.getByText('2 nodes')).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toBeVisible();
 	});
