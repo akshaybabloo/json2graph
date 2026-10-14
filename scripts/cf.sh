@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The build command for Cloudflare's builds, whose image has no Rust:
 #
-#   bash support/cf.sh
+#   bash scripts/cf.sh
 #
 # It installs rustup, which takes the version of Rust and the WebAssembly
 # target from rust-toolchain.toml, and then builds the site.
