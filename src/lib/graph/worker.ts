@@ -5,7 +5,7 @@
  */
 import init, { Document } from '#engine';
 import { MONO_FONT } from '../fonts';
-import type { ExportOptions, FromWorker, ToWorker } from './protocol';
+import type { ExportOptions, FromWorker, GraphStats, ToWorker } from './protocol';
 import type { Theme } from './theme';
 
 const FONT_SIZE = 12;
@@ -87,9 +87,19 @@ let ctx: OffscreenCanvasRenderingContext2D | null = null;
 let size = { width: 0, height: 0, dpr: 1 };
 let view = { x: 0, y: 0, k: 1 };
 let theme: Theme;
+/** The document on screen. */
 let doc: Document | null = null;
 let sourcePtr = 0;
 let currentLoad = 0;
+
+/** A tab's indexed document, with what is said about it when it is shown again. */
+interface Kept {
+	doc: Document;
+	bytes: number;
+	ms: number;
+}
+/** The indexed document of each tab that has one, until the page discards it. */
+const kept = new Map<number, Kept>();
 let scheduled = false;
 /** Whether the last `cursor` message said the pointer was over an expandable value. */
 let hovering = false;
@@ -134,11 +144,18 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			requestDraw();
 			break;
 		case 'load':
-			load(message.id, message.data);
+			load(message.id, message.tab, message.data);
+			break;
+		case 'show':
+			showTab(message.id, message.tab);
 			break;
 		case 'clear':
 			currentLoad = message.id;
+			drop(message.tab);
 			show(null);
+			break;
+		case 'discard':
+			drop(message.tab);
 			break;
 		case 'click':
 			click(message.x, message.y);
@@ -233,10 +250,11 @@ function requestDraw() {
 	requestAnimationFrame(draw);
 }
 
-async function load(id: number, data: Blob) {
+async function load(id: number, tab: number, data: Blob) {
 	const started = performance.now();
 	currentLoad = id;
-	if (data.size > RETAIN_LIMIT) show(null);
+	// Not two large versions of one document at once.
+	if (data.size > RETAIN_LIMIT) drop(tab);
 
 	let next: Document | null = null;
 	let lastReport = started + PROGRESS_DELAY - 50;
@@ -307,28 +325,46 @@ async function load(id: number, data: Blob) {
 		return;
 	}
 
+	drop(tab);
+	const entry = { doc: next, bytes: data.size, ms: performance.now() - started };
+	kept.set(tab, entry);
 	show(next);
-	post({
-		type: 'ready',
-		id,
-		stats: {
-			bytes: data.size,
-			values: next.value_count(),
-			boxes: next.box_count(),
-			width: next.width(),
-			height: next.height(),
-			rootWidth: next.root_width(),
-			rootTop: next.root_top(),
-			rootHeight: next.root_height(),
-			ms: performance.now() - started
-		}
-	});
-	requestDraw();
+	post({ type: 'ready', id, restored: false, stats: statsOf(entry) });
 }
 
-/** Replaces the document on screen and frees the previous one. */
+/** Shows the document a tab kept, or nothing when it has none. Like a load, it supersedes older loads. */
+function showTab(id: number, tab: number) {
+	currentLoad = id;
+	const entry = kept.get(tab);
+	show(entry?.doc ?? null);
+	if (entry) post({ type: 'ready', id, restored: true, stats: statsOf(entry) });
+}
+
+/** Frees the document a tab kept, which takes it off the screen if it is there. */
+function drop(tab: number) {
+	const entry = kept.get(tab);
+	if (!entry) return;
+	kept.delete(tab);
+	if (doc === entry.doc) show(null);
+	entry.doc.free();
+}
+
+function statsOf({ doc, bytes, ms }: Kept): GraphStats {
+	return {
+		bytes,
+		values: doc.value_count(),
+		boxes: doc.box_count(),
+		width: doc.width(),
+		height: doc.height(),
+		rootWidth: doc.root_width(),
+		rootTop: doc.root_top(),
+		rootHeight: doc.root_height(),
+		ms
+	};
+}
+
+/** Puts a document on screen. Documents are freed by `drop`, not here. */
 function show(next: Document | null) {
-	doc?.free();
 	doc = next;
 	sourcePtr = next ? next.source_ptr() : 0;
 	strings.clear();

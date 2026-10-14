@@ -43,9 +43,17 @@ export type ToWorker =
 	| { type: 'theme'; theme: Theme }
 	/** Screen = world * k + (x, y). */
 	| { type: 'view'; x: number; y: number; k: number }
-	| { type: 'load'; id: number; data: Blob }
-	/** Removes the graph. Like a load, it supersedes any load with an older `id`. */
-	| { type: 'clear'; id: number }
+	/** Indexes `data` as the document of `tab`, in place of the one it had, and shows it. */
+	| { type: 'load'; id: number; tab: number; data: Blob }
+	/**
+	 * Shows the document `tab` kept, or nothing if it has none. Like a load, it
+	 * supersedes any load with an older `id`.
+	 */
+	| { type: 'show'; id: number; tab: number }
+	/** Removes the graph of `tab`, which is on screen. It supersedes older loads too. */
+	| { type: 'clear'; id: number; tab: number }
+	/** Frees the document `tab` kept, which is not on screen; showing it again takes a load. */
+	| { type: 'discard'; tab: number }
 	/** Pointer events, in CSS pixels from the top left of the canvas. */
 	| { type: 'click'; x: number; y: number }
 	/** Collapses every box into its row, leaving the root, or shows every box again. */
@@ -58,7 +66,8 @@ export type ToWorker =
 /** Progress and outcome of the load with the same `id`. */
 export type LoadEvent =
 	| { type: 'progress'; id: number; phase: 'reading' | 'parsing' | 'layout'; fraction: number }
-	| { type: 'ready'; id: number; stats: GraphStats }
+	/** With `restored`, the graph is one a tab kept, as it was left, rather than a new one. */
+	| { type: 'ready'; id: number; stats: GraphStats; restored: boolean }
 	| { type: 'error'; id: number; message: string };
 
 /**
