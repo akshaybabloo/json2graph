@@ -61,7 +61,7 @@ git tag 1.2.3
 git push origin 1.2.3
 ```
 
-That runs the tests and, when they pass, builds the site and deploys it to Cloudflare Workers with `wrangler deploy` (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
+That runs the tests and, when they pass, builds the site, deploys it to Cloudflare Workers with `wrangler deploy`, and creates a release on GitHub whose notes list the pull requests merged since the last one (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
 
 The tag is the version the site shows in a badge beside its name, which links to that tag's release on GitHub. A build that is not made from a tag shows what `git describe` calls its commit instead, which is the last tag and how far past it the commit is.
 
