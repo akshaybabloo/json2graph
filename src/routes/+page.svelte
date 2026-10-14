@@ -473,6 +473,10 @@
 		controls="workspace"
 		onselect={selectTab}
 		onclose={closeTab}
+		onrename={(id, value) => {
+			const renamed = tabs.find((t) => t.id === id);
+			if (renamed) renamed.name = value;
+		}}
 		onnew={() => {
 			addTab();
 			if (!sourceHidden) editor?.focus();

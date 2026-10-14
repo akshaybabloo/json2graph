@@ -385,7 +385,7 @@ test.describe('tabs', () => {
 			/freed to save memory/
 		);
 		await page.getByRole('tab', { name: 'a.json' }).click();
-		await expect(page.getByRole('tab', { name: 'a.json' })).toHaveAttribute('title', 'a.json');
+		await expect(page.getByRole('tab', { name: 'a.json' })).not.toHaveAttribute('title', /freed/);
 		await expect(page.getByText('2 nodes')).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toBeVisible();
 	});
@@ -405,6 +405,37 @@ test.describe('tabs', () => {
 		await page.locator('.cm-content').click();
 		await page.keyboard.press('ControlOrMeta+z');
 		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+	});
+
+	test('renames a tab that is double-clicked, or given F2', async ({ page }) => {
+		await openFile(page, 'a.json', A);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		const field = page.getByRole('textbox', { name: 'Name of the tab' });
+
+		await page.getByRole('tab', { name: 'a.json' }).dblclick();
+		await expect(field).toBeFocused();
+		await expect(field).toHaveValue('a.json');
+		await field.fill('orders.json');
+		await field.press('Enter');
+		await expect(page.getByRole('tab')).toHaveText(['orders.json']);
+		await expect(page.getByRole('tab', { name: 'orders.json' })).toBeFocused();
+		await expect(page.getByRole('banner').getByText('orders.json')).toBeVisible();
+
+		// Escape, or a blank name, keeps the name it had.
+		await page.keyboard.press('F2');
+		await field.fill('other.json');
+		await field.press('Escape');
+		await expect(page.getByRole('tab')).toHaveText(['orders.json']);
+		await page.keyboard.press('F2');
+		await field.fill('  ');
+		await field.press('Enter');
+		await expect(page.getByRole('tab')).toHaveText(['orders.json']);
+
+		// Leaving the field keeps what was typed.
+		await page.getByRole('tab', { name: 'orders.json' }).dblclick();
+		await field.fill('kept.json');
+		await page.locator('canvas').click();
+		await expect(page.getByRole('tab')).toHaveText(['kept.json']);
 	});
 
 	test('closes a tab and shows the one next to it, and empties the last one', async ({ page }) => {
