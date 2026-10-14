@@ -11,10 +11,12 @@
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
+	import { version } from '$app/env';
 	import sample from '#lib/assets/sample.json?raw';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
+	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
@@ -31,6 +33,13 @@
 	 */
 	const EDITOR_LIMIT = 100 * 1024 * 1024;
 	const REPOSITORY = 'https://github.com/akshaybabloo/json2graph';
+	/**
+	 * Where the release this was built from is described. Only a build made
+	 * from a release's tag has the tag alone as its version, and so has one.
+	 */
+	const release = /^\d+\.\d+\.\d+$/.test(version)
+		? `${REPOSITORY}/releases/tag/${version}`
+		: undefined;
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
 	/** What an image of a document that was typed rather than opened is called. */
 	const UNTITLED = 'untitled';
@@ -266,10 +275,21 @@
 		Skip to the graph
 	</a>
 	<header class="flex items-center gap-2 border-b px-4 py-2 text-sm">
-		<h1 class="mr-2 flex items-center gap-1.5 font-semibold">
+		<h1 class="flex items-center gap-1.5 font-semibold">
 			<Logo class="size-6" />
 			<span>json<span class="text-(--brand)">2</span>graph</span>
 		</h1>
+		<Badge
+			variant="secondary"
+			class="mr-2"
+			href={release}
+			target={release && '_blank'}
+			rel={release && 'noreferrer'}
+			aria-label={release && `Version ${version} on GitHub`}
+			title={release ? `Version ${version} on GitHub` : `Version ${version}`}
+		>
+			{version}
+		</Badge>
 		<label
 			class={[
 				buttonVariants({ variant: 'outline', size: 'sm' }),

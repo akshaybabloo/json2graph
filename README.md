@@ -54,11 +54,20 @@ GitHub Actions runs them, with the Vitest tests, on every pull request (`.github
 
 ## Deployment
 
-A push to `main` runs the tests and, when they pass, builds the site and deploys it to Cloudflare Workers with `wrangler deploy` (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
+The site is released by pushing a tag that is a version number, three numbers with dots between them:
 
-Previews of other branches and of pull requests are built by Cloudflare itself, from its connection to the repository. Its build image has no Rust, so the build command to set there is `bash support/cf.sh`, which installs Rust and then runs `pnpm run build`.
+```sh
+git tag 1.2.3
+git push origin 1.2.3
+```
 
-`pnpm run deploy` does the same from a machine that is logged in to Cloudflare, without running the tests.
+That runs the tests and, when they pass, builds the site and deploys it to Cloudflare Workers with `wrangler deploy` (`.github/workflows/deploy.yml`). The repository needs the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the variable `VITE_SITE_URL`.
+
+The tag is the version the site shows in a badge beside its name, which links to that tag's release on GitHub. A build that is not made from a tag shows what `git describe` calls its commit instead, which is the last tag and how far past it the commit is.
+
+Previews of `main`, of other branches and of pull requests are built by Cloudflare itself, from its connection to the repository. Its build image has no Rust, so the build command to set there is `bash support/cf.sh`, which installs Rust and then runs `pnpm run build`. Its deploy command for the production branch must upload a version without deploying it (`npx wrangler versions upload`), or every push to `main` would be released.
+
+`pnpm run deploy` builds and deploys from a machine that is logged in to Cloudflare, without running the tests.
 
 `scripts/generate-json.mjs <megabytes> <file>` writes a large test document.
 

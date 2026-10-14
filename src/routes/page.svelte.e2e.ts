@@ -65,6 +65,16 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await expect(page.getByRole('link', { name: 'Skip to the graph' })).toBeFocused();
 });
 
+test('shows the version it was built as, and links it to the release', async ({ page }) => {
+	const version = page.getByRole('link', { name: 'Version 0.0.0 on GitHub' });
+	await expect(version).toHaveText('0.0.0');
+	await expect(version).toHaveAttribute(
+		'href',
+		'https://github.com/akshaybabloo/json2graph/releases/tag/0.0.0'
+	);
+	await expect(version).toHaveAttribute('target', '_blank');
+});
+
 test('lets the editor be formatted and cleared only when there is something in it', async ({
 	page
 }) => {

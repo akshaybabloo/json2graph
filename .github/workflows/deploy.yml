@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
   contents: read
@@ -35,6 +35,7 @@ jobs:
 
       - run: pnpm run build
         env:
+          APP_VERSION: ${{ github.ref_name }}
           VITE_SITE_URL: ${{ vars.VITE_SITE_URL }}
 
       - run: pnpm exec wrangler deploy

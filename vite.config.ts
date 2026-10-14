@@ -1,8 +1,26 @@
+import { execSync } from 'node:child_process';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-cloudflare';
 import { sveltekit } from '@sveltejs/kit/vite';
+
+/**
+ * What the site says its version is: `APP_VERSION` when the build is given
+ * one, as a deployment is with the tag it was made from, and otherwise what
+ * git calls the commit, which is the last tag and how far past it this is.
+ */
+function version(): string {
+	if (process.env.APP_VERSION) return process.env.APP_VERSION;
+	try {
+		return execSync('git describe --tags --always --dirty', {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore']
+		}).trim();
+	} catch {
+		return 'dev';
+	}
+}
 
 export default defineConfig({
 	plugins: [
@@ -14,7 +32,8 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 
-			adapter: adapter()
+			adapter: adapter(),
+			version: { name: version() }
 		})
 	],
 	// The workers import their WebAssembly packages as ES modules.
