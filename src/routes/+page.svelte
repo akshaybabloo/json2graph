@@ -98,7 +98,7 @@
 			].join(' · ')
 	);
 
-	/** What is said next to the name of the file: the step under way, or the summary. */
+	/** What the header says about the graph: the step under way, or the summary. */
 	const status = $derived(progress ? `${progress.label}…` : summary);
 
 	/** What the graph is, for those who cannot see the canvas. */
@@ -437,13 +437,7 @@
 			<EraserIcon />
 			Clear
 		</Button>
-		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
-			{#if name}
-				<span class="font-medium text-foreground">{name}</span>
-			{/if}
-			{#if name && status}·{/if}
-			{status}
-		</p>
+		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">{status}</p>
 		<Button
 			variant="ghost"
 			size="icon-sm"

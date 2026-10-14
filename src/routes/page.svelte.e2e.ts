@@ -380,12 +380,13 @@ test.describe('tabs', () => {
 		await page.getByRole('tab', { name: 'b.json' }).click();
 		await expect(page.getByText('4 nodes')).toBeVisible();
 		await page.clock.fastForward('11:00');
-		await expect(page.getByRole('tab', { name: 'a.json' })).toHaveAttribute(
-			'title',
-			/freed to save memory/
-		);
+		const tooltip = page.locator('[data-slot=tooltip-content]');
+		await page.getByRole('tab', { name: 'a.json' }).hover();
+		await expect(tooltip).toContainText('Freed to save memory');
 		await page.getByRole('tab', { name: 'a.json' }).click();
-		await expect(page.getByRole('tab', { name: 'a.json' })).not.toHaveAttribute('title', /freed/);
+		await page.mouse.move(0, 0);
+		await page.getByRole('tab', { name: 'a.json' }).hover();
+		await expect(tooltip).toContainText('Double-click to rename');
 		await expect(page.getByText('2 nodes')).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toBeVisible();
 	});
@@ -419,7 +420,6 @@ test.describe('tabs', () => {
 		await field.press('Enter');
 		await expect(page.getByRole('tab')).toHaveText(['orders.json']);
 		await expect(page.getByRole('tab', { name: 'orders.json' })).toBeFocused();
-		await expect(page.getByRole('banner').getByText('orders.json')).toBeVisible();
 
 		// Escape, or a blank name, keeps the name it had.
 		await page.keyboard.press('F2');

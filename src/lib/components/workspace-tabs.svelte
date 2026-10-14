@@ -119,21 +119,31 @@
 						onblur={(event) => finish(tab.id, event.currentTarget.value, false)}
 					/>
 				{:else}
-					<button
-						id="tab-{tab.id}"
-						class="h-full max-w-56 truncate rounded-tl-lg pr-2 pl-3 outline-ring focus-visible:outline-2"
-						role="tab"
-						aria-selected={selected}
-						aria-controls={selected ? controls : undefined}
-						tabindex={selected ? 0 : -1}
-						title={tab.discarded
-							? `${tabLabel(tab)}: freed to save memory, and read again when shown`
-							: `${tabLabel(tab)} (double-click to rename)`}
-						onclick={() => onselect(tab.id)}
-						ondblclick={() => (renaming = tab.id)}
-					>
-						{tabLabel(tab)}
-					</button>
+					<!-- After a pause, like the tooltip of a browser's tab. -->
+					<Tooltip.Root delayDuration={500}>
+						<Tooltip.Trigger
+							id="tab-{tab.id}"
+							class="h-full max-w-56 truncate rounded-tl-lg pr-2 pl-3 outline-ring focus-visible:outline-2"
+							role="tab"
+							aria-selected={selected}
+							aria-controls={selected ? controls : undefined}
+							tabindex={selected ? 0 : -1}
+							onclick={() => onselect(tab.id)}
+							ondblclick={() => (renaming = tab.id)}
+						>
+							{tabLabel(tab)}
+						</Tooltip.Trigger>
+						<Tooltip.Content side="bottom">
+							<div class="flex flex-col">
+								<span class="font-medium">{tabLabel(tab)}</span>
+								<span class="opacity-70">
+									{tab.discarded
+										? 'Freed to save memory, and read again when shown'
+										: 'Double-click to rename'}
+								</span>
+							</div>
+						</Tooltip.Content>
+					</Tooltip.Root>
 				{/if}
 				<button
 					class="mr-2 grid size-5 place-items-center rounded-sm text-muted-foreground outline-ring hover:bg-muted hover:text-foreground focus-visible:outline-2"
