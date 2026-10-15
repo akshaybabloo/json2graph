@@ -1,7 +1,6 @@
 import { isolateHistory } from '@codemirror/commands';
-import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { Annotation, EditorState, type Extension } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
@@ -87,6 +86,8 @@ export type EditorHandlers = {
 export class JsonEditor {
 	#view: EditorView;
 	#extensions: Extension[];
+	/** The language of the document, which its type decides. */
+	#language = new Compartment();
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#onEdit: (text: string) => void;
 
@@ -94,7 +95,7 @@ export class JsonEditor {
 		this.#onEdit = onEdit;
 		this.#extensions = [
 			basicSetup,
-			json(),
+			this.#language.of([]),
 			theme,
 			syntaxHighlighting(highlighting),
 			indentGuides,
@@ -145,6 +146,11 @@ export class JsonEditor {
 		return this.#timer !== undefined;
 	}
 
+	/** The first `length` characters of the document. */
+	head(length: number): string {
+		return this.#view.state.doc.sliceString(0, length);
+	}
+
 	get empty(): boolean {
 		return this.#view.state.doc.length === 0;
 	}
@@ -158,13 +164,19 @@ export class JsonEditor {
 	 * Shows another document, without reporting an edit: a state this editor
 	 * gave out, which brings back its selection and undo history, or a text.
 	 */
-	restore(saved: EditorState | string) {
+	restore(saved: EditorState | string, language: Extension) {
 		this.#cancel();
-		this.#view.setState(
-			typeof saved === 'string'
-				? EditorState.create({ doc: saved, extensions: this.#extensions })
-				: saved
-		);
+		if (typeof saved !== 'string') {
+			this.#view.setState(saved);
+			return;
+		}
+		const state = EditorState.create({ doc: saved, extensions: this.#extensions });
+		this.#view.setState(state.update({ effects: this.#language.reconfigure(language) }).state);
+	}
+
+	/** Highlights and folds the document as being in `language`. */
+	setLanguage(language: Extension) {
+		this.#view.dispatch({ effects: this.#language.reconfigure(language) });
 	}
 
 	/**

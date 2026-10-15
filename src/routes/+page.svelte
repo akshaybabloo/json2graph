@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ChevronsDownUpIcon from '@lucide/svelte/icons/chevrons-down-up';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
@@ -14,17 +15,29 @@
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import { version } from '$app/env';
-	import sample from '#lib/assets/sample.json?raw';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
 	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
-	import { formatJson } from '#lib/format/format.js';
+	import {
+		ACCEPT,
+		contentBlob,
+		DEFAULT_TYPE,
+		detect,
+		documentType,
+		DOCUMENT_TYPES,
+		EXAMPLES,
+		SNIFF_LENGTH,
+		typeOfName,
+		type DocumentType
+	} from '#lib/document-types.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import type { Session } from '#lib/session/protocol.js';
@@ -32,14 +45,7 @@
 	import { SessionStore } from '#lib/session/store.js';
 	import { SITE } from '#lib/site.js';
 	import { toggleTheme } from '#lib/theme.js';
-	import {
-		DROP_TEXT_OVER,
-		jsonBlob,
-		newTab,
-		tabLabel,
-		toDiscard,
-		type Tab
-	} from '#lib/workspace.js';
+	import { DROP_TEXT_OVER, newTab, tabLabel, toDiscard, type Tab } from '#lib/workspace.js';
 	import { EditorState } from '@codemirror/state';
 	import type { Pane } from 'paneforge';
 
@@ -58,6 +64,8 @@
 		? `${REPOSITORY}/releases/tag/${version}`
 		: undefined;
 	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
+	/** The choice of a document's type that leaves it to be detected. */
+	const AUTO = 'auto';
 	/** What an image of a document that was typed rather than opened is called. */
 	const UNTITLED = 'untitled';
 
@@ -82,6 +90,8 @@
 	const name = $derived(tab.name);
 	/** Size of the open file when it is too large for the editor. */
 	const tooLarge = $derived(tab.file?.size ?? null);
+	/** The type of the document on screen. */
+	const docType = $derived(documentType(tab.type));
 	/** The saved text of the tab on screen while it is read back, before it is in the editor. */
 	let readingText = $state<Blob | null>(null);
 	/** Whether the saved tabs are being brought back, which the page waits for. */
@@ -92,6 +102,10 @@
 	let saveError = $state<string | null>(null);
 	/** Whether the editor has no text. */
 	let empty = $state(true);
+	/** Whether the tab on screen has nothing in it, so that a document can be opened there. */
+	const blank = $derived(name === null && tooLarge === null && empty && !readingText && !tab.lost);
+	/** An example waiting to be told where to open, as the tab on screen is in use. */
+	let pendingExample = $state<File | null>(null);
 	/** Whether the editor's pane is collapsed, so only the graph shows. */
 	let sourceHidden = $state(false);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
@@ -156,6 +170,7 @@
 			onFormat: format,
 			onEmpty: (value) => (empty = value)
 		});
+		editor.setLanguage(docType.language());
 		return () => {
 			editor?.destroy();
 			editor = undefined;
@@ -193,7 +208,8 @@
 
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
-		const content = jsonBlob(text);
+		if (!tab.typeChosen) setType(detect(tab.name, text), false);
+		const content = contentBlob(text, docType);
 		saver?.content(tab.id, content);
 		if (text.trim() === '') {
 			clearGraph();
@@ -204,17 +220,42 @@
 		controller?.load(tab.id, content, { keepView: true });
 	}
 
-	/** Re-indents the document in the editor. Text that is not JSON is left as it is. */
+	/** Re-indents the document in the editor, if its type has a formatter. Text that is not valid is left as it is. */
 	async function format() {
+		const formatter = docType.format;
 		const text = editor?.text ?? '';
-		if (text.trim() === '') return;
+		if (!formatter || text.trim() === '') return;
 		try {
-			const formatted = await formatJson(text);
+			const formatted = await formatter(text);
 			// Not over what was typed in the meantime.
 			if (editor?.text === text) editor.replace(formatted);
 		} catch (reason) {
 			// The error of the graph, if it is on screen, says where the mistake is.
 			error ??= `Cannot format: ${reason instanceof Error ? reason.message : reason}`;
+		}
+	}
+
+	/**
+	 * Makes the tab on screen a document of `type`, and says whether that is a
+	 * change. A type that was chosen is no longer detected.
+	 */
+	function setType(type: DocumentType, chosen: boolean) {
+		tab.typeChosen = chosen;
+		if (tab.type === type.id) return false;
+		tab.type = type.id;
+		editor?.setLanguage(type.language());
+		return true;
+	}
+
+	/** Detects the type of the document on screen again, or takes the one chosen. */
+	function chooseType(choice: string) {
+		const type =
+			choice === AUTO
+				? detect(tab.name, tab.file || readingText ? '' : (editor?.head(SNIFF_LENGTH) ?? ''))
+				: documentType(choice);
+		// Saved again, as content of its new type.
+		if (setType(type, choice !== AUTO) && !readingText) {
+			saver?.content(tab.id, contentBlob(tab.file ?? editor?.text ?? '', type), true);
 		}
 	}
 
@@ -236,7 +277,8 @@
 		tab.lost = false;
 		readingText = null;
 		editor?.setText('');
-		saver?.content(tab.id, jsonBlob(''), true);
+		setType(DEFAULT_TYPE, false);
+		saver?.content(tab.id, contentBlob('', DEFAULT_TYPE), true);
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
 		if (!sourceHidden) editor?.focus();
@@ -247,7 +289,7 @@
 		if (!editor) return;
 		if (editor.pending) {
 			// An edit that typing had not yet paused for: saved, but not indexed.
-			saver?.content(tab.id, jsonBlob(editor.text));
+			saver?.content(tab.id, contentBlob(editor.text, docType));
 			tab.indexed = false;
 		}
 		// A graph that is behind the text is not worth keeping.
@@ -277,15 +319,16 @@
 		controller?.show(current.id, current.view);
 		const saved = current.saved;
 		current.saved = null;
+		const language = documentType(current.type).language();
 		if (saved instanceof Blob) {
 			readingText = saved;
-			editor?.restore('');
+			editor?.restore('', language);
 			empty = true;
 			saved.text().then(
 				(text) => {
 					if (shown !== showing || readingText !== saved) return;
 					readingText = null;
-					editor?.restore(text);
+					editor?.restore(text, language);
 					empty = editor?.empty ?? true;
 					reindex();
 				},
@@ -296,7 +339,7 @@
 				}
 			);
 		} else {
-			editor?.restore(saved ?? '');
+			editor?.restore(saved ?? '', language);
 			empty = editor?.empty ?? true;
 			reindex();
 		}
@@ -311,7 +354,7 @@
 			return;
 		}
 		const text = editor?.text ?? '';
-		if (text.trim()) controller?.load(tab.id, jsonBlob(text), { view: tab.view });
+		if (text.trim()) controller?.load(tab.id, contentBlob(text, docType), { view: tab.view });
 	}
 
 	/**
@@ -353,6 +396,8 @@
 					id: t.id,
 					name: t.name,
 					file: t.file !== null,
+					type: t.type,
+					typeChosen: t.typeChosen,
 					size: saver?.sizeOf(t.id) ?? 0,
 					view: view && { x: view.x, y: view.y, k: view.k }
 				};
@@ -362,7 +407,10 @@
 
 	/** Whenever a tab is opened, closed, renamed or shown, the list of tabs is saved. */
 	const sessionShape = $derived(
-		JSON.stringify([activeId, tabs.map((t) => [t.id, t.name, t.file !== null, t.lost])])
+		JSON.stringify([
+			activeId,
+			tabs.map((t) => [t.id, t.name, t.file !== null, t.lost, t.type, t.typeChosen])
+		])
 	);
 	$effect(() => {
 		if (sessionShape) saver?.session();
@@ -415,6 +463,9 @@
 			return {
 				...newTab(id),
 				name: record.name,
+				// Saved before there were types, or of a type there is no longer.
+				type: documentType(record.type ?? DEFAULT_TYPE.id).id,
+				typeChosen: record.typeChosen ?? false,
 				view: record.view,
 				file: record.file ? content : null,
 				saved: record.file ? null : content,
@@ -507,17 +558,32 @@
 		show();
 	}
 
-	/** Opens a file into the tab on screen when that has nothing in it, and otherwise into a new tab. */
-	async function open(file: File) {
+	/**
+	 * Opens a file into the tab on screen when that has nothing in it, and
+	 * otherwise into a new tab; or, as asked, into one or the other.
+	 */
+	async function open(file: File, into: 'blank' | 'current' | 'new' = 'blank') {
 		await sessionRestored;
-		const reusable = name === null && tooLarge === null && empty && !readingText && !tab.lost;
-		const target = reusable ? tab : addTab();
+		const here = into === 'current' || (into === 'blank' && blank);
+		const target = here ? tab : addTab();
+		if (here) {
+			// What the tab held before goes.
+			readingText = null;
+			target.file = null;
+			target.lost = false;
+		}
 		const id = (target.reading = ++opened);
 		const since = shown;
 		target.name = file.name;
 		error = null;
+		// What the name of the file says it is, or else what it starts with.
+		const type = typeOfName(file.name) ?? detect(null, await file.slice(0, SNIFF_LENGTH).text());
+		if (target.reading !== id || !tabs.includes(target)) return;
+		target.type = type.id;
+		target.typeChosen = false;
+		if (target.id === activeId) editor?.setLanguage(type.language());
 		// The file itself is kept: storing it does not read it on this thread.
-		saver?.content(target.id, jsonBlob(file), true);
+		saver?.content(target.id, contentBlob(file, type), true);
 		controller?.load(target.id, file);
 		if (file.size > EDITOR_LIMIT) {
 			target.file = file;
@@ -533,12 +599,24 @@
 		}
 		editor?.setText(text);
 		// Shown again before its text was read, the tab has no graph yet.
-		if (shown !== since) controller?.load(target.id, jsonBlob(text), { view: target.view });
+		if (shown !== since) {
+			controller?.load(target.id, contentBlob(text, type), { view: target.view });
+		}
 	}
 
-	/** Opens the sample document. */
-	function openExample() {
-		open(new File([sample], 'sample.json', { type: 'application/json' }));
+	/** Opens the example of a type, asking first where to when the tab on screen is in use. */
+	function openExample(type: DocumentType) {
+		if (!type.example) return;
+		const file = new File([type.example.text], type.example.name, { type: type.mime });
+		if (blank) open(file);
+		else pendingExample = file;
+	}
+
+	/** Opens the example that was waiting, where the user said. */
+	function placeExample(into: 'current' | 'new') {
+		const file = pendingExample;
+		pendingExample = null;
+		if (file) open(file, into);
 	}
 
 	function onPick(event: Event & { currentTarget: HTMLInputElement }) {
@@ -642,26 +720,21 @@
 		>
 			<FolderOpenIcon />
 			Open file
-			<input type="file" accept=".json,application/json" class="sr-only" onchange={onPick} />
+			<input type="file" accept={ACCEPT} class="sr-only" onchange={onPick} />
 		</label>
-		<Button variant="outline" size="sm" onclick={openExample}>
-			<FileBracesIcon />
-			Example
-		</Button>
-		<Button
-			variant="outline"
-			size="sm"
-			disabled={empty}
-			title="Format the JSON (Shift+Alt+F in the editor)"
-			onclick={format}
-		>
-			<ListIndentIncreaseIcon />
-			Format
-		</Button>
-		<Button variant="outline" size="sm" disabled={empty && name === null} onclick={clear}>
-			<EraserIcon />
-			Clear
-		</Button>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger class={buttonVariants({ variant: 'outline', size: 'sm' })}>
+				<FileBracesIcon />
+				Example
+				<ChevronDownIcon />
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="start" class="w-auto min-w-44">
+				<DropdownMenu.Label>Open an example</DropdownMenu.Label>
+				{#each EXAMPLES as type (type.id)}
+					<DropdownMenu.Item onSelect={() => openExample(type)}>{type.label}</DropdownMenu.Item>
+				{/each}
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">{status}</p>
 		<Button
 			variant="ghost"
@@ -906,6 +979,63 @@
 			</Tooltip.Trigger>
 			<Tooltip.Content>{sourceHidden ? 'Show editor' : 'Hide editor'}</Tooltip.Content>
 		</Tooltip.Root>
+		<DropdownMenu.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<DropdownMenu.Trigger
+							{...props}
+							class={buttonVariants({ variant: 'ghost', size: 'xs' })}
+							aria-label="Type of the document: {docType.label}"
+						>
+							{docType.label}
+							<ChevronsUpDownIcon />
+						</DropdownMenu.Trigger>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>
+					{tab.typeChosen ? 'Type of the document' : 'Type of the document, as detected'}
+				</Tooltip.Content>
+			</Tooltip.Root>
+			<DropdownMenu.Content align="start" side="top" class="w-auto min-w-44">
+				<DropdownMenu.RadioGroup
+					value={tab.typeChosen ? tab.type : AUTO}
+					onValueChange={chooseType}
+				>
+					<DropdownMenu.RadioItem value={AUTO} closeOnSelect
+						>Detect automatically</DropdownMenu.RadioItem
+					>
+					<DropdownMenu.Separator />
+					{#each DOCUMENT_TYPES as type (type.id)}
+						<DropdownMenu.RadioItem value={type.id} closeOnSelect
+							>{type.label}</DropdownMenu.RadioItem
+						>
+					{/each}
+				</DropdownMenu.RadioGroup>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger
+				class={buttonVariants({ variant: 'ghost', size: 'xs' })}
+				disabled={empty || !docType.format || readingText !== null}
+				onclick={format}
+			>
+				<ListIndentIncreaseIcon />
+				Format
+			</Tooltip.Trigger>
+			<Tooltip.Content>Format the {docType.label} (Shift+Alt+F in the editor)</Tooltip.Content>
+		</Tooltip.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger
+				class={buttonVariants({ variant: 'ghost', size: 'xs' })}
+				disabled={empty && name === null}
+				onclick={clear}
+			>
+				<EraserIcon />
+				Clear
+			</Tooltip.Trigger>
+			<Tooltip.Content>Empty this tab: its text and its graph</Tooltip.Content>
+		</Tooltip.Root>
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
 			{#if saveError}
 				<span class="text-destructive">Some tabs could not be kept: {saveError}</span>
@@ -917,11 +1047,36 @@
 		</p>
 	</footer>
 
+	<AlertDialog.Root
+		open={pendingExample !== null}
+		onOpenChange={(open) => {
+			if (!open) pendingExample = null;
+		}}
+	>
+		<AlertDialog.Content>
+			<AlertDialog.Header>
+				<AlertDialog.Title>Where should the example open?</AlertDialog.Title>
+				<AlertDialog.Description>
+					{tabLabel(tab)} already has a document in it. The example can replace it, or open in a new tab.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action variant="outline" onclick={() => placeExample('current')}>
+					Replace this tab
+				</AlertDialog.Action>
+				<AlertDialog.Action onclick={() => placeExample('new')}
+					>Open in a new tab</AlertDialog.Action
+				>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Root>
+
 	{#if dragging}
 		<div
 			class="pointer-events-none fixed inset-2 grid place-items-center rounded-lg border-2 border-dashed border-ring bg-muted/70 text-sm font-medium"
 		>
-			Drop a JSON file to open it
+			Drop a file to open it
 		</div>
 	{/if}
 </div>

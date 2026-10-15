@@ -1,4 +1,5 @@
 import type { EditorState } from '@codemirror/state';
+import { DEFAULT_TYPE } from './document-types';
 import type { View } from './graph/controller';
 
 /**
@@ -19,6 +20,10 @@ export type Tab = {
 	saved: EditorState | string | Blob | null;
 	/** Whether its content was not kept when the page was closed, so that it cannot be shown. */
 	lost: boolean;
+	/** Id of the type of its document. */
+	type: string;
+	/** Whether the type was chosen, rather than detected, which then stops. */
+	typeChosen: boolean;
 	/** Where its graph was panned and zoomed to when another tab was shown. */
 	view: View | null;
 	/** Whether every node was last collapsed, rather than shown. */
@@ -47,6 +52,8 @@ export function newTab(id: number): Tab {
 		file: null,
 		saved: null,
 		lost: false,
+		type: DEFAULT_TYPE.id,
+		typeChosen: false,
 		view: null,
 		allCollapsed: false,
 		error: null,
@@ -56,15 +63,6 @@ export function newTab(id: number): Tab {
 		hiddenAt: 0,
 		reading: 0
 	};
-}
-
-/** The type of the content of a tab, as it is saved. */
-const JSON_TYPE = 'application/json';
-
-/** Content as it is saved and indexed: a blob that says it is JSON. A file is not copied. */
-export function jsonBlob(content: string | Blob): Blob {
-	if (content instanceof Blob && content.type === JSON_TYPE) return content;
-	return new Blob([content], { type: JSON_TYPE });
 }
 
 /** What a tab is called on screen. */

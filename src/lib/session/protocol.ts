@@ -9,6 +9,9 @@ export interface TabRecord {
 	name: string | null;
 	/** Whether its content is a file too large for the editor, rather than the text in it. */
 	file: boolean;
+	/** Id of the type of its document, and whether it was chosen rather than detected. */
+	type: string;
+	typeChosen: boolean;
 	/** Size of its content when it was last saved, so that content gone missing can be told from none. */
 	size: number;
 	view: View | null;
