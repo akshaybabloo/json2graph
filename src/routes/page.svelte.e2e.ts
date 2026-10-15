@@ -1566,6 +1566,33 @@ test.describe('Settings', () => {
 		expect((await graphShot(page)).equals(sharp)).toBe(true);
 	});
 
+	test('leaves the connections of a Mermaid diagram to Mermaid', async ({ page }) => {
+		await openExample(page, 'Mermaid');
+		await expect(page.locator('[data-diagram] svg')).toContainText('What type is it?');
+
+		await openSettings(page);
+		await expect(page.getByText('Mermaid diagrams draw their own connections.')).toBeVisible();
+		await expect(page.getByRole('menuitemradio', { name: 'Curved' })).toBeDisabled();
+		await expect(page.getByRole('menuitemradio', { name: 'Sharp' })).toBeDisabled();
+		await expect(
+			page.getByRole('menuitemcheckbox', { name: 'Show keys on connections' })
+		).toBeDisabled();
+		await expect(
+			page.getByRole('menuitemcheckbox', { name: 'Remember tabs in this browser' })
+		).toBeEnabled();
+		await closeSettings(page);
+
+		// On a tab of JSON, they can be changed again.
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await openSettings(page);
+		await expect(page.getByText('Mermaid diagrams draw their own connections.')).toHaveCount(0);
+		await expect(page.getByRole('menuitemradio', { name: 'Sharp' })).toBeEnabled();
+		await expect(
+			page.getByRole('menuitemcheckbox', { name: 'Show keys on connections' })
+		).toBeEnabled();
+		await closeSettings(page);
+	});
+
 	test('writes the key of each node on the connection to it, array elements too', async ({
 		page
 	}) => {

@@ -991,17 +991,25 @@
 			</Tooltip.Root>
 			<DropdownMenu.Content align="end" class="w-64">
 				<DropdownMenu.Label>Connections</DropdownMenu.Label>
+				{#if isDiagram}
+					<p class="px-2 pb-1.5 text-xs text-muted-foreground">
+						Mermaid diagrams draw their own connections.
+					</p>
+				{/if}
 				<DropdownMenu.RadioGroup
 					value={settings.connections}
 					onValueChange={(value) => changeSettings({ connections: value as Connections })}
 				>
-					<DropdownMenu.RadioItem value="curved" closeOnSelect={false}
+					<DropdownMenu.RadioItem value="curved" closeOnSelect={false} disabled={isDiagram}
 						>Curved</DropdownMenu.RadioItem
 					>
-					<DropdownMenu.RadioItem value="sharp" closeOnSelect={false}>Sharp</DropdownMenu.RadioItem>
+					<DropdownMenu.RadioItem value="sharp" closeOnSelect={false} disabled={isDiagram}
+						>Sharp</DropdownMenu.RadioItem
+					>
 				</DropdownMenu.RadioGroup>
 				<DropdownMenu.CheckboxItem
 					checked={settings.connectionKeys}
+					disabled={isDiagram}
 					onCheckedChange={(checked) => changeSettings({ connectionKeys: checked })}
 				>
 					Show keys on connections
