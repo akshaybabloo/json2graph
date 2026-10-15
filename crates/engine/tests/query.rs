@@ -241,3 +241,86 @@ fn array_rows_carry_the_label_of_their_array() {
     let f = run(&g, &view(0.0, 0.0, 1.0));
     assert_eq!(f.labels, [LABEL_NONE, 0, 0]);
 }
+
+/// The key of each edge in `f`, as the renderer writes it on the edge.
+fn edge_keys(src: &str, f: &Frame) -> Vec<String> {
+    f.edge_keys
+        .chunks(3)
+        .map(|key| match key[0] {
+            KEY_NAME => src[key[1] as usize..][..key[2] as usize].to_string(),
+            KEY_INDEX => format!("[{}]", key[1]),
+            _ => panic!("an edge without a key"),
+        })
+        .collect()
+}
+
+#[test]
+fn every_edge_has_the_key_of_its_child() {
+    let src = r#"{"name": "Ada", "address": {"city": "Pune"}, "matrix": [[1, 2], {"a": 3}]}"#;
+    let g = graph(src);
+    let f = run(&g, &view(0.0, 0.0, 1.0));
+    assert_eq!(f.edge_keys.len(), f.edges.len() / 4 * 3);
+    let mut keys = edge_keys(src, &f);
+    keys.sort();
+    // Properties by name, and the elements of an array by index.
+    assert_eq!(keys, ["[0]", "[1]", "address", "matrix"]);
+}
+
+/// The three straight parts of each sharp edge in `f`: along its row, down or
+/// up its lane, and into its child, as `(x1, y1, x2, y2)`.
+fn sharp_parts(f: &Frame) -> Vec<[[f32; 4]; 3]> {
+    f.edges
+        .chunks(4)
+        .zip(&f.edge_bends)
+        .map(|(e, &bend)| {
+            [
+                [e[0], e[1], bend, e[1]],
+                [bend, e[1], bend, e[3]],
+                [bend, e[3], e[2], e[3]],
+            ]
+        })
+        .collect()
+}
+
+/// Whether two straight parts, each horizontal or vertical, share a point.
+fn touch(a: [f32; 4], b: [f32; 4]) -> bool {
+    let span = |p: f32, q: f32| (p.min(q), p.max(q));
+    let (ax, ay) = (span(a[0], a[2]), span(a[1], a[3]));
+    let (bx, by) = (span(b[0], b[2]), span(b[1], b[3]));
+    ax.0 <= bx.1 && bx.0 <= ax.1 && ay.0 <= by.1 && by.0 <= ay.1
+}
+
+#[test]
+fn sharp_edges_from_one_box_never_touch() {
+    let documents = [
+        r#"{"a": {"x": 1}, "b": [1, 2], "c": {"y": {"z": 1}}, "d": 1, "e": {"p": 1, "q": 2, "r": 3}}"#,
+        r#"{"name": "json2graph", "author": {"name": "Ada", "contact": {"email": "a"}}, "tags": ["a", "b", "c"], "matrix": [[1, 0], [0, 1]], "releases": [{"tag": "v1", "assets": [{"f": 1}, {"f": 2}]}, {"tag": "v0", "assets": []}], "settings": {"zoom": {"min": 0}, "x": 1}}"#,
+        &records(12),
+    ];
+    for src in documents {
+        let g = graph(src);
+        let f = run(&g, &fit(&g));
+        assert_eq!(f.edge_bends.len(), f.edges.len() / 4);
+        let parts = sharp_parts(&f);
+        for (i, a) in parts.iter().enumerate() {
+            // Within the gap that the edge crosses.
+            let e = &f.edges[i * 4..][..4];
+            let bend = f.edge_bends[i];
+            assert!(
+                e[0] < bend && bend < e[2],
+                "{bend} is not between {} and {}",
+                e[0],
+                e[2]
+            );
+            for (j, b) in parts.iter().enumerate().skip(i + 1) {
+                // Edges from one box leave from the same side of it.
+                if f.edges[j * 4] != e[0] {
+                    continue;
+                }
+                for (pa, pb) in a.iter().flat_map(|pa| b.iter().map(move |pb| (pa, pb))) {
+                    assert!(!touch(*pa, *pb), "edges {i} and {j} touch in {src}");
+                }
+            }
+        }
+    }
+}

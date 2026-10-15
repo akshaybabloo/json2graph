@@ -31,7 +31,9 @@ export type SessionCall =
 	| { method: 'saveContent'; id: number; content: Blob }
 	| { method: 'deleteContent'; id: number }
 	/** The content kept for tab `id`, which is read from disk only when it is used. */
-	| { method: 'readContent'; id: number };
+	| { method: 'readContent'; id: number }
+	/** Forgets the session and every tab's content. */
+	| { method: 'clear' };
 
 /**
  * A session as it is read back, which may have been saved by an older
@@ -49,6 +51,7 @@ export type SessionResult = {
 	saveContent: void;
 	deleteContent: void;
 	readContent: Blob | null;
+	clear: void;
 };
 
 export type ToSessionWorker = { call: number } & SessionCall;

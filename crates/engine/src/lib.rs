@@ -257,6 +257,30 @@ impl Document {
         self.frame.edges.len()
     }
 
+    pub fn edge_bends_ptr(&self) -> usize {
+        self.frame.edge_bends.as_ptr() as usize
+    }
+
+    pub fn edge_bends_len(&self) -> usize {
+        self.frame.edge_bends.len()
+    }
+
+    pub fn far_edge_bends_ptr(&self) -> usize {
+        self.frame.far_edge_bends.as_ptr() as usize
+    }
+
+    pub fn far_edge_bends_len(&self) -> usize {
+        self.frame.far_edge_bends.len()
+    }
+
+    pub fn edge_keys_ptr(&self) -> usize {
+        self.frame.edge_keys.as_ptr() as usize
+    }
+
+    pub fn edge_keys_len(&self) -> usize {
+        self.frame.edge_keys.len()
+    }
+
     pub fn far_edges_ptr(&self) -> usize {
         self.frame.far_edges.as_ptr() as usize
     }

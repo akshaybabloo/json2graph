@@ -1,5 +1,6 @@
 /** Messages between the page and the graph worker. */
 
+import type { Connections } from '../settings.svelte';
 import type { Theme } from './theme';
 
 export interface GraphStats {
@@ -41,6 +42,8 @@ export type ToWorker =
 	  }
 	| { type: 'resize'; width: number; height: number; dpr: number }
 	| { type: 'theme'; theme: Theme }
+	/** How connections are drawn, and whether they are labelled with the keys of the nodes they lead to. */
+	| { type: 'settings'; connections: Connections; connectionKeys: boolean }
 	/** Screen = world * k + (x, y). */
 	| { type: 'view'; x: number; y: number; k: number }
 	/**

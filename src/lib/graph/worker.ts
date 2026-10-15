@@ -8,6 +8,7 @@ import { detectDelimiter } from '../csv/csv';
 import { MONO_FONT } from '../fonts';
 import { drawGrid } from './grid';
 import type { Converted } from '../yaml/worker';
+import type { Connections } from '../settings.svelte';
 import type { ExportOptions, FromWorker, GraphStats, LoadPhase, ToWorker } from './protocol';
 import type { Theme } from './theme';
 
@@ -16,6 +17,8 @@ const ROW_HEIGHT = 24;
 const PAD_X = 12;
 const PAD_Y = 0;
 const GAP_X = 72;
+/** The gap between a box and its children while edges carry keys, which leaves room for them. */
+const KEYED_GAP_X = 144;
 const GAP_Y = 20;
 /**
  * The control that collapses the box of a value: a square on the right edge
@@ -26,6 +29,8 @@ const TOGGLE_SIZE = 12;
 const TOGGLE_HIT = 18;
 const RADIUS = 6;
 const ARROW = 7;
+/** The size of the keys written on edges, a little smaller than the text in the boxes. */
+const EDGE_KEY_FONT_SIZE = 10;
 const MAX_KEY_CHARS = 32;
 const MAX_VALUE_CHARS = 48;
 /** Rows are drawn as text only when the font is at least this tall on screen. */
@@ -98,6 +103,8 @@ interface Kept {
 	doc: Document;
 	bytes: number;
 	ms: number;
+	/** The gap between boxes it was laid out with, which keys on edges widen. */
+	gap: number;
 }
 /** The indexed document of each tab that has one, until the page discards it. */
 const kept = new Map<number, Kept>();
@@ -110,6 +117,9 @@ let pointer: { x: number; y: number } | null = null;
 let focus = NONE;
 /** Whether the graph may be animated. */
 let motion = true;
+/** How connections are drawn, and whether they carry keys: see `src/lib/settings.svelte.ts`. */
+let connections: Connections = 'curved';
+let connectionKeys = false;
 
 const decoder = new TextDecoder();
 /** Decoded keys and values of recently drawn rows, by byte offset. */
@@ -136,6 +146,21 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 		case 'resize':
 			resize(message.width, message.height, message.dpr);
 			break;
+		case 'settings': {
+			connections = message.connections;
+			const keysChanged = connectionKeys !== message.connectionKeys;
+			connectionKeys = message.connectionKeys;
+			// The gap between boxes makes room for keys, or gives it back. The
+			// documents of hidden tabs are laid out again when they are shown.
+			const entry = keysChanged ? [...kept.values()].find((kept) => kept.doc === doc) : undefined;
+			if (entry) {
+				layOut(entry.doc);
+				entry.gap = gapX();
+				relaid(false);
+			}
+			requestDraw();
+			break;
+		}
 		case 'theme':
 			theme = message.theme;
 			requestDraw();
@@ -176,6 +201,26 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			break;
 	}
 });
+
+/** The gap between a box and its children. */
+function gapX(): number {
+	return connectionKeys ? KEYED_GAP_X : GAP_X;
+}
+
+/** Positions the boxes of `target` for the font and the settings in effect. */
+function layOut(target: Document) {
+	target.layout(
+		charWidth(ctx, FONT_SIZE),
+		ROW_HEIGHT,
+		PAD_X,
+		PAD_Y,
+		gapX(),
+		GAP_Y,
+		TOGGLE_HIT,
+		MAX_KEY_CHARS,
+		MAX_VALUE_CHARS
+	);
+}
 
 /** Whether rows are large enough on screen to be drawn as text, and so to be clicked. */
 function textVisible(): boolean {
@@ -366,17 +411,7 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 			next.free();
 			return;
 		}
-		next.layout(
-			charWidth(ctx, FONT_SIZE),
-			ROW_HEIGHT,
-			PAD_X,
-			PAD_Y,
-			GAP_X,
-			GAP_Y,
-			TOGGLE_HIT,
-			MAX_KEY_CHARS,
-			MAX_VALUE_CHARS
-		);
+		layOut(next);
 	} catch (error) {
 		next?.free();
 		if (id === currentLoad) {
@@ -386,7 +421,7 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 	}
 
 	drop(tab);
-	const entry = { doc: next, bytes, ms: performance.now() - started };
+	const entry = { doc: next, bytes, ms: performance.now() - started, gap: gapX() };
 	kept.set(tab, entry);
 	show(next);
 	post({ type: 'ready', id, restored: false, stats: statsOf(entry) });
@@ -396,6 +431,11 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 function showTab(id: number, tab: number) {
 	supersede(id);
 	const entry = kept.get(tab);
+	// Keys were turned on or off while it was hidden.
+	if (entry && entry.gap !== gapX()) {
+		layOut(entry.doc);
+		entry.gap = gapX();
+	}
 	show(entry?.doc ?? null);
 	if (entry) post({ type: 'ready', id, restored: true, stats: statsOf(entry) });
 }
@@ -513,7 +553,7 @@ function render(
 	const k = view.k;
 	const text = FONT_SIZE * k >= MIN_TEXT_PX;
 	doc.query(view.x, view.y, k, width, height, text);
-	drawFrame(ctx, k, text, false);
+	drawFrame(ctx, k, text, false, scene.background);
 	if (scene.focus === NONE) return;
 
 	// The graph fades behind a veil of the background, and the path to the
@@ -523,18 +563,20 @@ function render(
 	ctx.fillRect(0, 0, width, height);
 	ctx.globalAlpha = 1;
 	doc.query_path(scene.focus, view.x, view.y, k, width, height, text);
-	drawFrame(ctx, k, text, true);
+	drawFrame(ctx, k, text, true, scene.background);
 }
 
 /**
- * Draws what the last query of the engine found, at scale `k`. With `strong`
- * its edges and outlines are darker, for the path that stands out.
+ * Draws what the last query of the engine found, at scale `k`, over
+ * `background`. With `strong` its edges and outlines are darker, for the path
+ * that stands out.
  */
 function drawFrame(
 	ctx: OffscreenCanvasRenderingContext2D,
 	k: number,
 	text: boolean,
-	strong: boolean
+	strong: boolean,
+	background: string
 ) {
 	if (!doc) return;
 	// Views are created after the query: when WebAssembly memory grows, views
@@ -542,6 +584,8 @@ function drawFrame(
 	const buffer = memory.buffer;
 	const edges = new Float32Array(buffer, doc.edges_ptr(), doc.edges_len());
 	const farEdges = new Float32Array(buffer, doc.far_edges_ptr(), doc.far_edges_len());
+	const bends = new Float32Array(buffer, doc.edge_bends_ptr(), doc.edge_bends_len());
+	const farBends = new Float32Array(buffer, doc.far_edge_bends_ptr(), doc.far_edge_bends_len());
 	const slivers = new Float32Array(buffer, doc.slivers_ptr(), doc.slivers_len());
 	const boxes = new Float32Array(buffer, doc.boxes_ptr(), doc.boxes_len());
 	const edgeColour = strong ? theme.key : theme.edge;
@@ -552,7 +596,7 @@ function drawFrame(
 	ctx.strokeStyle = edgeColour;
 	ctx.lineWidth = Math.min(Math.max(k * 1.25, 0.6), 2.5);
 	ctx.globalAlpha = 0.25;
-	strokeEdges(ctx, farEdges, 0);
+	strokeEdges(ctx, farEdges, farBends, 0);
 	ctx.globalAlpha = 1;
 	if (strong && motion) {
 		// Never so small that the dashes run together.
@@ -562,7 +606,7 @@ function drawFrame(
 		// A falling offset moves the dashes from the start of an edge to its end.
 		ctx.lineDashOffset = -(((performance.now() / 1000) * FLOW_SPEED * scale) % period);
 	}
-	strokeEdges(ctx, edges, arrow);
+	strokeEdges(ctx, edges, bends, arrow);
 	ctx.setLineDash([]);
 
 	if (arrow) {
@@ -579,6 +623,7 @@ function drawFrame(
 		ctx.fillStyle = edgeColour;
 		ctx.fill();
 	}
+	if (text && connectionKeys) drawEdgeKeys(ctx, buffer, edges, bends, k, strong, background);
 
 	ctx.beginPath();
 	for (let i = 0; i < slivers.length; i += 4) {
@@ -616,19 +661,93 @@ function drawFrame(
 	}
 }
 
-/** Strokes `x1, y1, x2, y2` edges as one path of curves that stop `inset` pixels short. */
-function strokeEdges(ctx: OffscreenCanvasRenderingContext2D, edges: Float32Array, inset: number) {
+/**
+ * Strokes `x1, y1, x2, y2` edges as one path that stops `inset` pixels short:
+ * a curve for each, or, for sharp connections, straight lines that turn at
+ * right angles at the `x` in `bends`, a lane of each edge's own.
+ */
+function strokeEdges(
+	ctx: OffscreenCanvasRenderingContext2D,
+	edges: Float32Array,
+	bends: Float32Array,
+	inset: number
+) {
 	ctx.beginPath();
 	for (let i = 0; i < edges.length; i += 4) {
 		const x1 = edges[i];
 		const y1 = edges[i + 1];
 		const x2 = edges[i + 2] - inset;
 		const y2 = edges[i + 3];
-		const mid = (x1 + x2) / 2;
 		ctx.moveTo(x1, y1);
-		ctx.bezierCurveTo(mid, y1, mid, y2, x2, y2);
+		if (connections === 'sharp') {
+			const bend = bends[i / 4];
+			ctx.lineTo(bend, y1);
+			ctx.lineTo(bend, y2);
+			ctx.lineTo(x2, y2);
+		} else {
+			const mid = (x1 + x2) / 2;
+			ctx.bezierCurveTo(mid, y1, mid, y2, x2, y2);
+		}
 	}
 	ctx.stroke();
+}
+
+/**
+ * Writes on each edge the key of the node it leads to: its name, or its
+ * `[index]` in an array. Each key sits on a patch of `background` that breaks
+ * the line, and is cut short to fit. On a curve it is halfway along; a sharp
+ * edge has it on its last part, into the child, as the lanes where sharp
+ * edges turn are too close together for keys.
+ */
+function drawEdgeKeys(
+	ctx: OffscreenCanvasRenderingContext2D,
+	buffer: ArrayBuffer,
+	edges: Float32Array,
+	bends: Float32Array,
+	k: number,
+	strong: boolean,
+	background: string
+) {
+	const keys = new Uint32Array(buffer, doc!.edge_keys_ptr(), doc!.edge_keys_len());
+	const fontPx = EDGE_KEY_FONT_SIZE * k;
+	const charW = charWidth(ctx, fontPx);
+	const padX = 4 * k;
+	const height = fontPx + 4 * k;
+	// The patches are cut out of a transparent background, rather than filled with nothing.
+	const clear = background === 'transparent';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	for (let i = 0, at = 0; i < edges.length; i += 4, at += 3) {
+		const [x2, y2] = [edges[i + 2], edges[i + 3]];
+		// On the part of a sharp edge that leads into its child.
+		const sharp = connections === 'sharp';
+		const x1 = sharp ? bends[i / 4] : edges[i];
+		const y1 = sharp ? y2 : edges[i + 1];
+		// Clear of the arrowhead and of the box the edge leaves.
+		const room = Math.floor((x2 - x1 - 2 * padX - 2 * ARROW * k) / charW);
+		if (room < 1) continue;
+		let key =
+			keys[at] === KEY_INDEX
+				? `[${keys[at + 1]}]`
+				: sourceText(keys[at + 1], keys[at + 2], MAX_KEY_CHARS);
+		if (key.length > room) key = `${key.slice(0, Math.max(room - 1, 0))}…`;
+		const x = (x1 + x2) / 2;
+		const y = (y1 + y2) / 2;
+		const width = key.length * charW + 2 * padX;
+		ctx.beginPath();
+		ctx.roundRect(x - width / 2, y - height / 2, width, height, height / 2);
+		if (clear) {
+			ctx.globalCompositeOperation = 'destination-out';
+			ctx.fill();
+			ctx.globalCompositeOperation = 'source-over';
+		} else {
+			ctx.fillStyle = background;
+			ctx.fill();
+		}
+		ctx.fillStyle = strong ? theme.key : theme.edge;
+		ctx.fillText(key, x, y);
+	}
+	ctx.textAlign = 'start';
 }
 
 function drawRows(ctx: OffscreenCanvasRenderingContext2D, buffer: ArrayBuffer, fontPx: number) {

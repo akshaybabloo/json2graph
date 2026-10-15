@@ -101,6 +101,19 @@ export class TabSaver {
 		this.#store.destroy();
 	}
 
+	/** Stops saving, and forgets everything that was saved. */
+	async forget() {
+		for (const { timer } of this.#pending.values()) clearTimeout(timer);
+		clearTimeout(this.#sessionTimer);
+		this.#pending.clear();
+		try {
+			// After any write already on its way, which would otherwise outlive it.
+			await this.#store.call({ method: 'clear' });
+		} finally {
+			this.#store.destroy();
+		}
+	}
+
 	async #write(id: number) {
 		const pending = this.#pending.get(id);
 		if (!pending) return;

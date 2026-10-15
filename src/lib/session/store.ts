@@ -9,10 +9,13 @@ const LOCK = 'json2graph-session';
  */
 export class SessionStore {
 	#worker: Worker;
+	/** Lets another window keep the tabs. */
+	#release: () => void;
 	#calls = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 	#called = 0;
 
-	private constructor() {
+	private constructor(release: () => void) {
+		this.#release = release;
 		this.#worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 		this.#worker.addEventListener('message', (event: MessageEvent<FromSessionWorker>) => {
 			const reply = event.data;
@@ -26,8 +29,8 @@ export class SessionStore {
 	/** The store, unless another window keeps the tabs or the browser keeps nothing. */
 	static async open(): Promise<SessionStore | null> {
 		if (typeof indexedDB === 'undefined') return null;
-		if (!(await claim())) return null;
-		return new SessionStore();
+		const release = await claim();
+		return release && new SessionStore(release);
 	}
 
 	call<M extends SessionCall['method']>(
@@ -40,19 +43,27 @@ export class SessionStore {
 		});
 	}
 
+	/** Stops keeping the tabs, which another window may then do. */
 	destroy() {
 		this.#worker.terminate();
+		this.#release();
 	}
 }
 
-/** Whether this window gets to keep the tabs: the first window open does, until it closes. */
-function claim(): Promise<boolean> {
-	if (!navigator.locks) return Promise.resolve(true);
+/**
+ * Whether this window gets to keep the tabs: the first window open does, until
+ * it closes or stops. What lets another window keep them, or null when one does.
+ */
+function claim(): Promise<(() => void) | null> {
+	if (!navigator.locks) return Promise.resolve(() => {});
 	return new Promise((resolve) => {
 		navigator.locks.request(LOCK, { ifAvailable: true }, (lock) => {
-			resolve(lock !== null);
-			// Held until the window closes.
-			return lock && new Promise(() => {});
+			if (!lock) {
+				resolve(null);
+				return;
+			}
+			// Held until it is let go, or the window closes.
+			return new Promise<void>((release) => resolve(release));
 		});
 	});
 }
