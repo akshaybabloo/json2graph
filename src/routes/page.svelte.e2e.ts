@@ -1122,6 +1122,23 @@ test.describe('Mermaid', () => {
 		expect(label).toBe(background);
 	});
 
+	test('shows the whole of a diagram drawn while it was hidden, once it is shown', async ({
+		page
+	}) => {
+		await page.getByRole('button', { name: 'Hide graph' }).click();
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		await expect(page.getByRole('button', { name: 'Type of the document: Mermaid' })).toBeVisible();
+		await expect(diagram(page)).toContainText('B');
+
+		await page.getByRole('button', { name: 'Show diagram' }).click();
+		const scale = () =>
+			page
+				.locator('[data-diagram]')
+				.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+		await expect.poll(scale).toBeGreaterThan(0.5);
+		await expect(diagram(page)).toBeInViewport();
+	});
+
 	test('draws the grid of the graph behind the diagram', async ({ page }) => {
 		await replaceSource(page, 'flowchart LR\n  A --> B');
 		await expect(diagram(page)).toContainText('B');

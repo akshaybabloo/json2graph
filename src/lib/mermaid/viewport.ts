@@ -28,6 +28,11 @@ export class DiagramViewport {
 	#zoom: ZoomBehavior<HTMLElement, unknown>;
 	/** The size of the diagram, unscaled, once there is one. */
 	#size: { width: number; height: number } | null = null;
+	/**
+	 * Whether the whole diagram is to be shown once the view has a size: one
+	 * drawn while its pane is collapsed has nothing to be fitted to.
+	 */
+	#pendingFit = false;
 	#disconnect: () => void;
 
 	constructor(container: HTMLElement, content: HTMLElement, grid: HTMLCanvasElement) {
@@ -61,7 +66,10 @@ export class DiagramViewport {
 			move();
 		};
 		container.addEventListener('keydown', onKey);
-		const sizeObserver = new ResizeObserver(() => this.drawGrid());
+		const sizeObserver = new ResizeObserver(() => {
+			this.drawGrid();
+			this.#settle();
+		});
 		sizeObserver.observe(container);
 		this.#disconnect = () => {
 			select(container).on('.zoom', null);
@@ -101,6 +109,7 @@ export class DiagramViewport {
 		const svg = this.#svg;
 		if (!svg) {
 			this.#size = null;
+			this.#pendingFit = false;
 			return;
 		}
 		// Mermaid draws to fit the width of its page; here it keeps its own size.
@@ -109,8 +118,8 @@ export class DiagramViewport {
 		svg.setAttribute('height', String(height));
 		svg.style.maxWidth = 'none';
 		this.#size = { width, height };
-		this.#limitZoom();
-		if (!keepView) this.fit();
+		if (!keepView) this.#pendingFit = true;
+		this.#settle();
 	}
 
 	zoomBy(factor: number) {
@@ -120,6 +129,11 @@ export class DiagramViewport {
 	/** Shows the whole diagram, no larger than it was drawn. */
 	fit() {
 		if (!this.#size) return;
+		if (!this.#hasSize()) {
+			this.#pendingFit = true;
+			return;
+		}
+		this.#pendingFit = false;
 		const k = Math.min(this.#fitScale(), 1);
 		const { clientWidth, clientHeight } = this.#container;
 		const x = (clientWidth - this.#size.width * k) / 2;
@@ -165,6 +179,22 @@ export class DiagramViewport {
 
 	destroy() {
 		this.#disconnect();
+	}
+
+	/** Whether the view takes up any room: its pane may be collapsed. */
+	#hasSize(): boolean {
+		return this.#container.clientWidth > 0 && this.#container.clientHeight > 0;
+	}
+
+	/**
+	 * Limits the zoom to the diagram's size in the view, and shows all of it
+	 * if that is waiting, once the view has a size: fitted to nothing, the
+	 * diagram would be scaled to nothing.
+	 */
+	#settle() {
+		if (!this.#size || !this.#hasSize()) return;
+		this.#limitZoom();
+		if (this.#pendingFit) this.fit();
 	}
 
 	/** The scale at which the whole diagram fits the view. */
