@@ -22,6 +22,17 @@ describe('detect', () => {
 		expect(detect(null, 'just a line, of words').id).toBe('json');
 	});
 
+	it('takes keys and values, or a list, for YAML', () => {
+		expect(detect('compose.YML', '{}').id).toBe('yaml');
+		expect(detect('values.yaml', '').id).toBe('yaml');
+		expect(detect(null, '# settings\n\nname: Ada\nage: 36\n').id).toBe('yaml');
+		expect(detect(null, 'name: Ada, Lovelace\ncity: London, UK\n').id).toBe('yaml');
+		expect(detect(null, '- one\n- two\n').id).toBe('yaml');
+		expect(detect(null, '---\na: 1\n').id).toBe('yaml');
+		expect(detect(null, '{"a": 1}').id).toBe('json');
+		expect(detect(null, 'url,name\nhttp://example.com,home\n').id).toBe('csv');
+	});
+
 	it('falls back on the default type', () => {
 		expect(detect(null, '')).toBe(DEFAULT_TYPE);
 		expect(documentType('no such type')).toBe(DEFAULT_TYPE);

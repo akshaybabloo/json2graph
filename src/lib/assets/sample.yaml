@@ -1,0 +1,37 @@
+# A service and where it runs. YAML's anchors, merge keys and block text all
+# end up as plain values in the graph.
+name: json2graph
+description: >-
+  Every mapping and sequence is a box. Its rows are its values, and arrows
+  lead to nested boxes.
+version: 1
+public: true
+owner: null
+
+defaults: &defaults
+  region: eu-west-2
+  replicas: 2
+  resources:
+    cpu: 250m
+    memory: 256Mi
+
+environments:
+  staging:
+    <<: *defaults
+    url: https://staging.example.com
+  production:
+    <<: *defaults
+    replicas: 6
+    url: https://example.com
+
+steps:
+  - name: Build
+    run: pnpm run build
+  - name: Test
+    run: |
+      pnpm run test:unit --run
+      pnpm exec playwright test
+  - name: Deploy
+    needs: [Build, Test]
+
+tags: [yaml, graph, canvas]

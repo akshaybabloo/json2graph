@@ -2,8 +2,10 @@ import { json } from '@codemirror/lang-json';
 import type { Extension } from '@codemirror/state';
 import sampleCsv from './assets/sample.csv?raw';
 import sampleJson from './assets/sample.json?raw';
+import sampleYaml from './assets/sample.yaml?raw';
 import { looksLikeCsv } from './csv/csv';
 import { csvLanguage } from './csv/language';
+import { yamlLanguage } from './yaml/language';
 
 /** A kind of document the editor holds, and what the app does with it. */
 export interface DocumentType {
@@ -35,7 +37,7 @@ const JSON_TYPE: DocumentType = {
 	language: () => json(),
 	sniff: (text) => (/^\s*[[{]/.test(text) ? 1 : 0),
 	// Loaded when it is first used: nothing else needs the formatter.
-	format: async (text) => (await import('./format/format')).formatJson(text),
+	format: async (text) => (await import('./format/format')).formatText(text, 'json'),
 	example: { name: 'sample.json', text: sampleJson }
 };
 
@@ -50,8 +52,32 @@ const CSV_TYPE: DocumentType = {
 	example: { name: 'people.csv', text: sampleCsv }
 };
 
+/**
+ * A line that starts a YAML document: a key and its value, an item of a
+ * sequence, or the marker or a directive that starts a document.
+ */
+const YAML_START = /^(?:---|%YAML|-(?:\s|$)|[^\s#:[{][^:]*:(?:\s|$))/;
+
+const YAML_TYPE: DocumentType = {
+	id: 'yaml',
+	label: 'YAML',
+	mime: 'application/yaml',
+	extensions: ['.yaml', '.yml'],
+	language: yamlLanguage,
+	sniff: (text) => {
+		// Comments and blank lines say nothing.
+		const line = text
+			.split(/\r\n|\n|\r/)
+			.find((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
+		// Surer than CSV, whose lines a value with commas in it can look like.
+		return line !== undefined && YAML_START.test(line) ? 0.7 : 0;
+	},
+	format: async (text) => (await import('./format/format')).formatText(text, 'yaml'),
+	example: { name: 'service.yaml', text: sampleYaml }
+};
+
 /** Every type a document can be, in the order they are offered. */
-export const DOCUMENT_TYPES: readonly DocumentType[] = [JSON_TYPE, CSV_TYPE];
+export const DOCUMENT_TYPES: readonly DocumentType[] = [JSON_TYPE, CSV_TYPE, YAML_TYPE];
 
 /** The types that have an example to open. */
 export const EXAMPLES = DOCUMENT_TYPES.filter((type) => type.example);

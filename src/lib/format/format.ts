@@ -1,7 +1,10 @@
 import wasm from '#formatter/wasm?url';
 
-/** What the formatter worker is sent: the compiled formatter and the text for it. */
-export type FormatRequest = { module: WebAssembly.Module; text: string };
+/** The languages the formatter knows. */
+export type FormatLanguage = 'json' | 'yaml';
+
+/** What the formatter worker is sent: the compiled formatter, and the text for it in its language. */
+export type FormatRequest = { module: WebAssembly.Module; text: string; language: FormatLanguage };
 
 /** What the formatter worker answers: the formatted text, or why there is none. */
 export type Formatted = { text: string; error: null } | { text: null; error: string };
@@ -22,13 +25,13 @@ function formatter(): Promise<WebAssembly.Module> {
 }
 
 /**
- * Re-indents JSON text with Biome's formatter. Rejects when the text is not
- * JSON that Biome can read.
+ * Re-indents JSON or YAML text with Biome's formatter. Rejects when the text
+ * is not one that Biome can read in that language.
  *
  * Each call runs in a worker of its own, which is then stopped: that gives
  * back the memory that a large document took.
  */
-export async function formatJson(text: string): Promise<string> {
+export async function formatText(text: string, language: FormatLanguage): Promise<string> {
 	const module = await formatter();
 	return new Promise((resolve, reject) => {
 		const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -41,6 +44,6 @@ export async function formatJson(text: string): Promise<string> {
 			worker.terminate();
 			reject(new Error(event.message || 'The formatter could not be loaded'));
 		});
-		worker.postMessage({ module, text } satisfies FormatRequest);
+		worker.postMessage({ module, text, language } satisfies FormatRequest);
 	});
 }
