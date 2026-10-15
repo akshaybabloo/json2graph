@@ -55,7 +55,7 @@ async function graphShot(page: Page): Promise<Buffer> {
 }
 
 /** What the editor shows while it is empty. */
-const PLACEHOLDER = 'Type or paste JSON here';
+const PLACEHOLDER = 'Type or paste here';
 
 test.beforeEach(async ({ page }) => {
 	await page.goto('/');
@@ -76,7 +76,7 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await page.getByRole('button', { name: 'Hide editor' }).click();
 	await expect(page.getByText('Open a file, or drop one anywhere on the page.')).toBeVisible();
 	await page.getByRole('button', { name: 'Show editor' }).click();
-	await expect(page.getByText(/Type or paste JSON on the left/)).toBeVisible();
+	await expect(page.getByText(/Type or paste on the left/)).toBeVisible();
 });
 
 test('shows the version it was built as, and links it to the release', async ({ page }) => {
@@ -319,7 +319,7 @@ test.describe('before the script of the page has run', () => {
 	test.use({ javaScriptEnabled: false });
 
 	test('is laid out as it will be, and says that it is loading', async ({ page }) => {
-		const editor = (await page.getByRole('region', { name: 'JSON source' }).boundingBox())!;
+		const editor = (await page.getByRole('region', { name: 'Source' }).boundingBox())!;
 		const graph = (await page.getByRole('region', { name: 'Graph', exact: true }).boundingBox())!;
 		expect(graph.width / editor.width).toBeCloseTo(72 / 28, 1);
 		await expect(page.getByRole('status')).toHaveText('Loading the graph engine…');
@@ -867,7 +867,7 @@ test.describe('with the example open', () => {
 	test('hides the editor so the graph takes the whole width, and shows it again', async ({
 		page
 	}) => {
-		const source = page.getByRole('region', { name: 'JSON source' });
+		const source = page.getByRole('region', { name: 'Source' });
 		const canvas = page.locator('canvas');
 		const width = (await canvas.boundingBox())!.width;
 
@@ -896,7 +896,7 @@ test.describe('with the example open', () => {
 			mimeType: 'application/json',
 			buffer: Buffer.from('{"a": }')
 		});
-		await expect(page.getByRole('region', { name: 'JSON source' })).toBeVisible();
+		await expect(page.getByRole('region', { name: 'Source' })).toBeVisible();
 		await expect(page.getByRole('alert')).toContainText('line 1');
 	});
 

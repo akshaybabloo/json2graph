@@ -82,7 +82,7 @@ export type EditorHandlers = {
 	onEmpty: (empty: boolean) => void;
 };
 
-/** A CodeMirror editor for JSON that reports edits once typing pauses. */
+/** A CodeMirror editor for the document of a tab, in its language, that reports edits once typing pauses. */
 export class JsonEditor {
 	#view: EditorView;
 	#extensions: Extension[];
@@ -99,8 +99,8 @@ export class JsonEditor {
 			theme,
 			syntaxHighlighting(highlighting),
 			indentGuides,
-			EditorView.contentAttributes.of({ 'aria-label': 'JSON source' }),
-			placeholder('Type or paste JSON here'),
+			EditorView.contentAttributes.of({ 'aria-label': 'Source' }),
+			placeholder('Type or paste here'),
 			keymap.of([{ key: 'Shift-Alt-f', run: () => (onFormat(), true) }]),
 			// Dropped files are opened by the page, not inserted as text.
 			EditorView.domEventHandlers({

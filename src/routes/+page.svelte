@@ -809,7 +809,7 @@
 					onCollapse={() => (sourceHidden = true)}
 					onExpand={() => (sourceHidden = false)}
 				>
-					<section id="source" class="relative flex h-full flex-col" aria-label="JSON source">
+					<section id="source" class="relative flex h-full flex-col" aria-label="Source">
 						<div class="min-h-0 flex-1" {@attach source}></div>
 
 						{#if error}
@@ -939,7 +939,7 @@
 									{#if sourceHidden}
 										Open a file, or drop one anywhere on the page.
 									{:else}
-										Type or paste JSON on the left, open a file, or drop one anywhere on the page.
+										Type or paste on the left, open a file, or drop one anywhere on the page.
 									{/if}
 									<span class="font-medium text-foreground">Example</span> loads a sample document.
 								</p>
