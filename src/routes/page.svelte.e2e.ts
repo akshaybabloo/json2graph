@@ -1103,6 +1103,8 @@ test.describe('Mermaid', () => {
 		expect((await style('|go|')).color).toBe(await token('--json-string'));
 		expect(await style('-->')).toEqual({ color: await token('--brand'), bold: true });
 		expect((await style('%% A note')).color).toBe(await token('--muted-foreground'));
+		// Not ended while Mermaid is still downloading: the server would say the page went away.
+		await expect(diagram(page)).toContainText('Begin');
 	});
 
 	test('draws the labels of edges over the line, not under it', async ({ page }) => {

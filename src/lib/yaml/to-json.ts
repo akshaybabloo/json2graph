@@ -112,16 +112,49 @@ export function yamlToJson(text: string): string {
 			cause: error
 		});
 	}
-	const writer = new JsonWriter(GROWTH * text.length + SLACK);
-	writer.write(documents.length > 1 ? documents : (documents[0] ?? null));
+	const root = documents.length > 1 ? documents : (documents[0] ?? null);
+	const room = GROWTH * text.length + SLACK;
+	// Each value takes at least a character, so too many is too much, found
+	// without writing any of it.
+	if (countValues(root, new Map(), new Set()) > room) throw tooMuch();
+	const writer = new JsonWriter(room);
+	writer.write(root);
 	return writer.text();
+}
+
+function tooMuch(): Error {
+	return new Error('The aliases in the document repeat too much of it');
+}
+
+/**
+ * How many values `value` is in JSON, itself and those it holds, with what
+ * aliases repeat counted each time. What an alias refers to is the same
+ * collection wherever it appears, so it is counted once, in `counts`; `open`
+ * holds the collections being counted, which an alias inside them cannot
+ * refer to.
+ */
+function countValues(value: unknown, counts: Map<object, number>, open: Set<object>): number {
+	if (!Array.isArray(value) && !(value instanceof Map)) return 1;
+	const known = counts.get(value);
+	if (known !== undefined) return known;
+	if (open.has(value)) throw new Error('An alias refers to a value that holds it');
+	open.add(value);
+	let count = 1;
+	if (Array.isArray(value)) {
+		for (const item of value) count += countValues(item, counts, open);
+	} else {
+		for (const [key, item] of value) {
+			count += countValues(key, counts, open) + countValues(item, counts, open);
+		}
+	}
+	open.delete(value);
+	counts.set(value, count);
+	return count;
 }
 
 class JsonWriter {
 	#parts: string[] = [];
 	#room: number;
-	/** The collections being written, which an alias inside them cannot refer to. */
-	#open = new Set<object>();
 
 	constructor(room: number) {
 		this.#room = room;
@@ -129,7 +162,7 @@ class JsonWriter {
 
 	#push(part: string) {
 		this.#room -= part.length;
-		if (this.#room < 0) throw new Error('The aliases in the document repeat too much of it');
+		if (this.#room < 0) throw tooMuch();
 		this.#parts.push(part);
 	}
 
@@ -150,12 +183,10 @@ class JsonWriter {
 			this.#push(JSON.stringify(value));
 		} else if (typeof value !== 'object') {
 			this.#push(String(value));
-		} else if (Array.isArray(value) || value instanceof Map) {
-			if (this.#open.has(value)) throw new Error('An alias refers to a value that holds it');
-			this.#open.add(value);
-			if (Array.isArray(value)) this.#items(value);
-			else this.#pairs(value);
-			this.#open.delete(value);
+		} else if (Array.isArray(value)) {
+			this.#items(value);
+		} else if (value instanceof Map) {
+			this.#pairs(value);
 		} else {
 			this.#push(JSON.stringify(String(value)));
 		}
