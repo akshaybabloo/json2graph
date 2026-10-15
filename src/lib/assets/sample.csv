@@ -1,0 +1,10 @@
+id,name,city,born,languages,active,notes
+1,Ada Lovelace,London,1815,1,false,"Wrote the first published algorithm, for the Analytical Engine"
+2,Grace Hopper,New York,1906,3,false,"Coined ""debugging"" after a moth in the Mark II"
+3,Katherine Johnson,White Sulphur Springs,1918,2,false,Computed trajectories for Apollo 11
+4,Margaret Hamilton,Paoli,1936,4,true,"Led the Apollo flight software team
+and named it software engineering"
+5,Radia Perlman,Portsmouth,1951,5,true,Designed the spanning tree protocol
+6,Barbara Liskov,Los Angeles,1939,6,true,
+7,Frances Allen,Peru,1932,2,false,First woman to win the Turing Award
+8,Annie Easley,Birmingham,1933,3,false,Worked on the Centaur rocket stage

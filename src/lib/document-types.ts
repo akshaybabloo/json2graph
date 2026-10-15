@@ -1,6 +1,9 @@
 import { json } from '@codemirror/lang-json';
 import type { Extension } from '@codemirror/state';
+import sampleCsv from './assets/sample.csv?raw';
 import sampleJson from './assets/sample.json?raw';
+import { looksLikeCsv } from './csv/csv';
+import { csvLanguage } from './csv/language';
 
 /** A kind of document the editor holds, and what the app does with it. */
 export interface DocumentType {
@@ -36,8 +39,19 @@ const JSON_TYPE: DocumentType = {
 	example: { name: 'sample.json', text: sampleJson }
 };
 
+const CSV_TYPE: DocumentType = {
+	id: 'csv',
+	label: 'CSV',
+	mime: 'text/csv',
+	extensions: ['.csv'],
+	language: csvLanguage,
+	// Less sure than JSON, which a brace or bracket gives away.
+	sniff: (text) => (/^\s*[[{]/.test(text) ? 0 : looksLikeCsv(text) ? 0.6 : 0),
+	example: { name: 'people.csv', text: sampleCsv }
+};
+
 /** Every type a document can be, in the order they are offered. */
-export const DOCUMENT_TYPES: readonly DocumentType[] = [JSON_TYPE];
+export const DOCUMENT_TYPES: readonly DocumentType[] = [JSON_TYPE, CSV_TYPE];
 
 /** The types that have an example to open. */
 export const EXAMPLES = DOCUMENT_TYPES.filter((type) => type.example);

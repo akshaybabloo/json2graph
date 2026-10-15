@@ -1,24 +1,26 @@
-//! json2graph engine: indexes a JSON document, lays it out as a graph of
-//! boxes and answers "what is visible in this viewport" for the renderer.
+//! json2graph engine: indexes a JSON or CSV document, lays it out as a graph
+//! of boxes and answers "what is visible in this viewport" for the renderer.
 //!
 //! The JavaScript side writes the source bytes straight into [`Document`]'s
 //! buffer and reads the draw lists back out of WebAssembly memory, so neither
 //! the document nor the graph is ever copied into JavaScript objects.
 
+pub mod csv;
 pub mod layout;
 pub mod parse;
 pub mod query;
 pub mod wrap;
 
+use csv::CsvParser;
 use layout::{Graph, Metrics};
-use parse::Parser;
+use parse::{ParseError, Parser, Value};
 use query::{Frame, View};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct Document {
     source: Vec<u8>,
-    parser: Option<Parser>,
+    parser: Option<Indexer>,
     graph: Option<Graph>,
     metrics: Option<Metrics>,
     frame: Frame,
@@ -31,11 +33,18 @@ impl Document {
     pub fn new(size: usize) -> Document {
         Document {
             source: vec![0; size],
-            parser: Some(Parser::new()),
+            parser: Some(Indexer::Json(Parser::new())),
             graph: None,
             metrics: None,
             frame: Frame::default(),
         }
+    }
+
+    /// Indexes the source as CSV rather than JSON: an array with an object
+    /// for each record after the first, which names the columns. Called
+    /// before `parse`.
+    pub fn csv(&mut self, delimiter: u8) {
+        self.parser = Some(Indexer::Csv(CsvParser::new(delimiter)));
     }
 
     pub fn source_ptr(&self) -> usize {
@@ -68,7 +77,7 @@ impl Document {
     pub fn parsed_bytes(&self) -> usize {
         self.parser
             .as_ref()
-            .map_or(self.source.len(), Parser::position)
+            .map_or(self.source.len(), Indexer::position)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -284,5 +293,34 @@ impl Document {
 
     fn metrics(&self) -> &Metrics {
         self.metrics.as_ref().expect("document is not laid out yet")
+    }
+}
+
+/// What indexes the source, by its format.
+enum Indexer {
+    Json(Parser),
+    Csv(CsvParser),
+}
+
+impl Indexer {
+    fn step(&mut self, src: &[u8], budget: usize) -> Result<bool, ParseError> {
+        match self {
+            Indexer::Json(parser) => parser.step(src, budget),
+            Indexer::Csv(parser) => parser.step(src, budget),
+        }
+    }
+
+    fn position(&self) -> usize {
+        match self {
+            Indexer::Json(parser) => parser.position(),
+            Indexer::Csv(parser) => parser.position(),
+        }
+    }
+
+    fn finish(self) -> Vec<Value> {
+        match self {
+            Indexer::Json(parser) => parser.finish(),
+            Indexer::Csv(parser) => parser.finish(),
+        }
     }
 }

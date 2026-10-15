@@ -188,22 +188,26 @@ export class GraphController {
 	}
 
 	/**
-	 * Replaces the graph of `tab`, which is on screen, with the JSON in `data`.
-	 * With `keepView` the pan and zoom are left alone, which suits edits to the
-	 * same document, and with `view` the graph is shown as it was when that
-	 * view was taken.
+	 * Replaces the graph of `tab`, which is on screen, with the document in
+	 * `data`, of the type `format` (JSON unless said). With `keepView` the pan
+	 * and zoom are left alone, which suits edits to the same document, and with
+	 * `view` the graph is shown as it was when that view was taken.
 	 */
 	load(
 		tab: number,
 		data: Blob,
-		{ keepView = false, view = null }: { keepView?: boolean; view?: View | null } = {}
+		{
+			format = 'json',
+			keepView = false,
+			view = null
+		}: { format?: string; keepView?: boolean; view?: View | null } = {}
 	) {
 		// With no graph on screen there is no view to keep: the first one gets
 		// the starting view, like any newly opened document.
 		this.#keepView = keepView && this.#stats !== null;
 		this.#restoreView = view;
 		this.#load += 1;
-		this.#post({ type: 'load', id: this.#load, tab, data });
+		this.#post({ type: 'load', id: this.#load, tab, data, format });
 	}
 
 	/**

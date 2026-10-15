@@ -8,10 +8,10 @@ async function replaceSource(page: Page, text: string) {
 	await page.keyboard.insertText(text);
 }
 
-/** Opens the JSON example from the Example menu. */
-async function openExample(page: Page) {
+/** Opens the example of a type from the Example menu. */
+async function openExample(page: Page, type = 'JSON') {
 	await page.getByRole('button', { name: 'Example' }).click();
-	await page.getByRole('menuitem', { name: 'JSON' }).click();
+	await page.getByRole('menuitem', { name: type }).click();
 	// Until the menu has faded out, the page takes no pointer events.
 	await expect(page.getByRole('menu')).toBeHidden();
 }
@@ -59,6 +59,12 @@ const PLACEHOLDER = 'Type or paste here';
 
 test.beforeEach(async ({ page }) => {
 	await page.goto('/');
+});
+
+test('leaves the right-click menu to the browser while there is no graph', async ({ page }) => {
+	await expect(page.getByRole('status')).toBeHidden();
+	await page.locator('canvas').click({ button: 'right' });
+	await expect(page.getByRole('menu')).toHaveCount(0);
 });
 
 test('starts with no document and says how to open one', async ({ page }) => {
@@ -766,6 +772,184 @@ test('opens an example into an empty tab, and asks where to when the tab is in u
 	await expect(page.getByText('16 nodes')).toBeVisible();
 });
 
+test.describe('CSV', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	test('shows a table as a graph, with the table below it', async ({ page }) => {
+		await openExample(page, 'CSV');
+		await expect(page.getByRole('tab', { name: 'people.csv' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Type of the document: CSV' })).toBeVisible();
+		// The array, and an object for each of the eight rows.
+		await expect(page.getByText('9 nodes')).toBeVisible();
+
+		const table = page.getByRole('table', { name: 'Rows' });
+		await expect(table).toHaveAttribute('aria-rowcount', '9');
+		await expect(table.getByRole('columnheader', { name: 'name' })).toBeVisible();
+		await expect(table.getByRole('row').nth(1)).toContainText('Ada Lovelace');
+		// A field over two lines is shown on one.
+		await expect(table.getByRole('row').nth(4)).toContainText('team ↵ and named');
+
+		// Not for a document that is not a table.
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await expect(page.getByRole('region', { name: 'Table' })).toBeHidden();
+		await page.getByRole('tab', { name: 'people.csv' }).click();
+		await expect(table.getByRole('columnheader', { name: 'name' })).toBeVisible();
+	});
+
+	test('colours each column of the text in turn', async ({ page }) => {
+		await replaceSource(page, 'name;"city, state";age\nAda;"London,\nUK";36');
+		await expect(page.getByRole('button', { name: 'Type of the document: CSV' })).toBeVisible();
+		const colour = (text: string) =>
+			page
+				.locator('.cm-content span', { hasText: new RegExp(`^${text}$`) })
+				.first()
+				.evaluate((span) => getComputedStyle(span).color);
+		const [name, city, age] = [
+			await colour('name'),
+			await colour('"city, state"'),
+			await colour('age')
+		];
+		expect(new Set([name, city, age]).size).toBe(3);
+		// A quoted field over two lines keeps its column's colour, and so does the column after it.
+		expect(await colour('"London,')).toBe(city);
+		expect(await colour('UK"')).toBe(city);
+		expect(await colour('36')).toBe(age);
+		expect(await colour(';')).not.toBe(name);
+	});
+
+	test('resizes the table, and hides the graph or the table from the footer', async ({ page }) => {
+		await openExample(page, 'CSV');
+		await expect(page.getByText('9 nodes')).toBeVisible();
+		const graph = page.getByRole('region', { name: 'Graph' });
+		const table = page.getByRole('region', { name: 'Table' });
+		const height = async () => (await table.boundingBox())!.height;
+
+		// Dragged up, the table grows; the size stays.
+		const before = await height();
+		const handle = page.getByRole('separator', { name: 'Resize the graph and the table' });
+		const box = (await handle.boundingBox())!;
+		await page.mouse.move(box.x + box.width / 2, box.y);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 8 });
+		await page.mouse.up();
+		await expect.poll(height).toBeGreaterThan(before + 100);
+		const dragged = await height();
+
+		await page.getByRole('button', { name: 'Hide table' }).click();
+		await expect(table).toBeHidden();
+		await page.getByRole('button', { name: 'Show table' }).click();
+		await expect.poll(height).toBeCloseTo(dragged, -1);
+
+		// Without the graph, the table takes its place.
+		await page.getByRole('button', { name: 'Hide graph' }).click();
+		await expect(graph).toBeHidden();
+		await expect.poll(height).toBeGreaterThan(dragged + 100);
+
+		// Whatever shows last stays.
+		await page.getByRole('button', { name: 'Hide editor' }).click();
+		await expect(page.getByRole('button', { name: 'Hide table' })).toBeDisabled();
+		await page.getByRole('button', { name: 'Show editor' }).click();
+		await page.getByRole('button', { name: 'Hide table' }).click();
+		await expect(table).toBeHidden();
+		await expect(page.getByRole('button', { name: 'Hide editor' })).toBeDisabled();
+
+		// A document without a table hides the graph alone, and gives the editor the room.
+		await page.getByRole('button', { name: 'Show graph' }).click();
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await expect(page.getByRole('button', { name: 'Hide table' })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: 'Show table' })).toHaveCount(0);
+		const editorWidth = (await page.getByRole('region', { name: 'Source' }).boundingBox())!.width;
+		await page.getByRole('button', { name: 'Hide graph' }).click();
+		await expect(graph).toBeHidden();
+		await expect
+			.poll(async () => (await page.getByRole('region', { name: 'Source' }).boundingBox())!.width)
+			.toBeGreaterThan(editorWidth * 2);
+		await page.getByRole('button', { name: 'Show graph' }).click();
+		await expect(graph).toBeVisible();
+	});
+
+	test('widens a column that is dragged, fitted or moved with the keys', async ({ page }) => {
+		await openExample(page, 'CSV');
+		const table = page.getByRole('table', { name: 'Rows' });
+		const notes = table.getByRole('columnheader', { name: 'notes' });
+		await expect(notes).toBeVisible();
+		const width = async () => (await notes.boundingBox())!.width;
+		const edge = table.getByRole('slider', { name: 'Width of notes' });
+
+		const start = await width();
+		const box = (await edge.boundingBox())!;
+		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(box.x + 100, box.y + box.height / 2, { steps: 5 });
+		await page.mouse.up();
+		await expect.poll(width).toBeCloseTo(start + 100, -1);
+
+		// Fitted, it is as wide as its longest note, which is longer than it starts.
+		await edge.dblclick();
+		await expect(
+			table.getByText('Wrote the first published algorithm, for the Analytical Engine')
+		).toBeVisible();
+		const fitted = await width();
+		await edge.focus();
+		await page.keyboard.press('ArrowLeft');
+		await expect.poll(width).toBeLessThan(fitted);
+	});
+
+	test('opens a field that does not fit its column in full', async ({ page }) => {
+		await openExample(page, 'CSV');
+		const table = page.getByRole('table', { name: 'Rows' });
+		const full = 'Wrote the first published algorithm, for the Analytical Engine';
+		await table.getByRole('button', { name: 'Wrote the first published' }).click();
+		const detail = page.getByRole('dialog');
+		await expect(detail).toContainText('notes');
+		await expect(detail).toContainText(full);
+		await page.keyboard.press('Escape');
+		await expect(detail).toBeHidden();
+
+		// With its line breaks, which the table shows as arrows.
+		await table.getByRole('button', { name: /Led the Apollo/ }).click();
+		await expect(detail.locator('p').last()).toHaveText(
+			'Led the Apollo flight software team\nand named it software engineering'
+		);
+
+		// A field that fits is not a button.
+		await expect(table.getByRole('button', { name: 'London' })).toHaveCount(0);
+	});
+
+	test('takes what is typed for a table when it looks like one', async ({ page }) => {
+		await replaceSource(page, 'name,age\nAda,36\nGrace,85');
+		await expect(page.getByRole('button', { name: 'Type of the document: CSV' })).toBeVisible();
+		await expect(page.getByText('3 nodes')).toBeVisible();
+		await expect(page.getByRole('table', { name: 'Rows' }).getByRole('row')).toHaveCount(3);
+	});
+
+	test('scrolls to the last of a great many rows', async ({ page }) => {
+		const count = 300_000;
+		const rows = Array.from({ length: count }, (_, i) => `${i},row-${i}`);
+		await openFile(page, 'many.csv', `id,name\n${rows.join('\n')}\n`);
+		await expect(page.getByText('300,001 nodes')).toBeVisible({ timeout: 15_000 });
+
+		const table = page.getByRole('table', { name: 'Rows' });
+		const scroller = page.locator('[data-scroller]');
+		await expect(table).toHaveAttribute('aria-rowcount', String(count + 1));
+		// Part way into a row, the row is cut off below the header, not drawn over it.
+		await scroller.evaluate((element) => (element.scrollTop = 1000 * 28 + 14));
+		const header = (await table.getByRole('row').first().boundingBox())!;
+		const above = await page.evaluate(
+			([x, y]) => document.elementFromPoint(x, y)?.closest('tr')?.getAttribute('aria-rowindex'),
+			[header.x + header.width / 3, header.y + header.height - 2]
+		);
+		expect(above).toBe('1');
+
+		await scroller.evaluate((element) => (element.scrollTop = element.scrollHeight));
+		await expect(table.getByText(`row-${count - 1}`)).toBeVisible();
+		await scroller.evaluate((element) => (element.scrollTop = 0));
+		await expect(table.getByText('row-0', { exact: true })).toBeVisible();
+	});
+});
+
 test.describe('with the example open', () => {
 	test.beforeEach(async ({ page }) => {
 		await openExample(page);
@@ -953,6 +1137,26 @@ test.describe('with the example open', () => {
 		// Away from every box the graph is whole again.
 		await page.mouse.move(box.x + 10, box.y + 10);
 		await expect.poll(async () => (await canvas.screenshot()).equals(whole)).toBe(true);
+	});
+
+	test('does what the toolbar does from the right-click menu of the graph', async ({ page }) => {
+		const canvas = page.locator('canvas');
+		await canvas.click({ button: 'right' });
+		const menu = page.getByRole('menu');
+		await expect(menu.getByRole('menuitem')).toHaveText([
+			/Zoom in/,
+			/Zoom out/,
+			/Fit to view/,
+			'Collapse all nodes',
+			'Export as image…'
+		]);
+		await menu.getByRole('menuitem', { name: 'Collapse all nodes' }).click();
+		await expect(page.getByRole('button', { name: 'Expand all nodes' })).toBeVisible();
+
+		await canvas.click({ button: 'right' });
+		await expect(menu.getByRole('menuitem', { name: 'Expand all nodes' })).toBeVisible();
+		await menu.getByRole('menuitem', { name: 'Export as image…' }).click();
+		await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeVisible();
 	});
 
 	test('zooms from the toolbar and exports the graph as a PNG', async ({ page }) => {

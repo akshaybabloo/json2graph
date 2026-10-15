@@ -4,6 +4,7 @@
  * size and the file to load.
  */
 import init, { Document } from '#engine';
+import { detectDelimiter } from '../csv/csv';
 import { MONO_FONT } from '../fonts';
 import type { ExportOptions, FromWorker, GraphStats, ToWorker } from './protocol';
 import type { Theme } from './theme';
@@ -31,6 +32,8 @@ const MIN_TEXT_PX = 5;
 const PARSE_CHUNK = 16 * 1024 * 1024;
 /** Loads shorter than this report no progress, so quick edits do not flash a progress bar. */
 const PROGRESS_DELAY = 100;
+/** How much of a CSV document is read to tell its delimiter. */
+const CSV_SNIFF_BYTES = 64 * 1024;
 /**
  * While a document up to this size loads, the previous graph stays on screen
  * and survives a failed load. Above it the previous document is freed first,
@@ -144,7 +147,7 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			requestDraw();
 			break;
 		case 'load':
-			load(message.id, message.tab, message.data);
+			load(message.id, message.tab, message.data, message.format);
 			break;
 		case 'show':
 			showTab(message.id, message.tab);
@@ -250,7 +253,7 @@ function requestDraw() {
 	requestAnimationFrame(draw);
 }
 
-async function load(id: number, tab: number, data: Blob) {
+async function load(id: number, tab: number, data: Blob, format: string) {
 	const started = performance.now();
 	currentLoad = id;
 	// Not two large versions of one document at once.
@@ -269,6 +272,15 @@ async function load(id: number, tab: number, data: Blob) {
 		await engine;
 		if (id !== currentLoad) return;
 		next = new Document(data.size);
+		if (format === 'csv') {
+			// Its start is enough to tell the delimiter.
+			const start = await data.slice(0, CSV_SNIFF_BYTES).text();
+			next.csv((detectDelimiter(start) ?? ',').charCodeAt(0));
+			if (id !== currentLoad) {
+				next.free();
+				return;
+			}
+		}
 
 		// Copy the file into the engine's buffer chunk by chunk, so it never
 		// exists as a JavaScript string.

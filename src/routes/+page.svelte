@@ -5,16 +5,24 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FileBracesIcon from '@lucide/svelte/icons/file-braces';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import ImageDownIcon from '@lucide/svelte/icons/image-down';
 	import ListIndentIncreaseIcon from '@lucide/svelte/icons/list-indent-increase';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize';
 	import MoonIcon from '@lucide/svelte/icons/moon';
+	import PanelBottomCloseIcon from '@lucide/svelte/icons/panel-bottom-close';
+	import PanelBottomOpenIcon from '@lucide/svelte/icons/panel-bottom-open';
 	import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
 	import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
+	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
+	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
+	import PanelTopCloseIcon from '@lucide/svelte/icons/panel-top-close';
+	import PanelTopOpenIcon from '@lucide/svelte/icons/panel-top-open';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import { version } from '$app/env';
+	import CsvTable from '#lib/components/csv-table.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
@@ -22,6 +30,7 @@
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
+	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
@@ -48,6 +57,7 @@
 	import { DROP_TEXT_OVER, newTab, tabLabel, toDiscard, type Tab } from '#lib/workspace.js';
 	import { EditorState } from '@codemirror/state';
 	import type { Pane } from 'paneforge';
+	import { untrack } from 'svelte';
 
 	/**
 	 * Larger files are shown as a graph only. The editor draws just the lines on
@@ -72,6 +82,12 @@
 	let controller: GraphController | undefined;
 	let editor: JsonEditor | undefined;
 	let sourcePane: Pane | undefined;
+	/** The pane of the graph and the table, to the right of the editor. */
+	let viewPane: Pane | undefined;
+	let graphPane: Pane | undefined;
+	let tablePane: Pane | undefined;
+	/** How tall the table last was beside the graph, as a share of their pane. */
+	let tableSize = 40;
 	/** Keeps the tabs over a reload; none in a window that leaves that to another. */
 	let saver: TabSaver | null = null;
 	/** Settles once the saved tabs are back, which comes before opening anything. */
@@ -92,6 +108,10 @@
 	const tooLarge = $derived(tab.file?.size ?? null);
 	/** The type of the document on screen. */
 	const docType = $derived(documentType(tab.type));
+	/** Whether the document on screen is a table, which is shown as one below its graph. */
+	const isCsv = $derived(tab.type === 'csv');
+	/** The text of the table: the CSV in the editor, or none for a file too large to hold as text. */
+	let tableText = $state.raw<string | null>(null);
 	/** The saved text of the tab on screen while it is read back, before it is in the editor. */
 	let readingText = $state<Blob | null>(null);
 	/** Whether the saved tabs are being brought back, which the page waits for. */
@@ -108,6 +128,10 @@
 	let pendingExample = $state<File | null>(null);
 	/** Whether the editor's pane is collapsed, so only the graph shows. */
 	let sourceHidden = $state(false);
+	/** Whether the graph is hidden: the table of a CSV, or else the editor, takes its place. */
+	let graphHidden = $state(false);
+	/** Whether the table of a CSV is hidden. */
+	let tableHidden = $state(false);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
 	let engineReady = $state(false);
 	let engineError = $state<string | null>(null);
@@ -170,7 +194,9 @@
 			onFormat: format,
 			onEmpty: (value) => (empty = value)
 		});
-		editor.setLanguage(docType.language());
+		// Untracked: the attachment would otherwise make a new, empty editor
+		// each time the type of the document changed.
+		editor.setLanguage(untrack(() => docType).language());
 		return () => {
 			editor?.destroy();
 			editor = undefined;
@@ -209,6 +235,7 @@
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
 		if (!tab.typeChosen) setType(detect(tab.name, text), false);
+		refreshTable(text);
 		const content = contentBlob(text, docType);
 		saver?.content(tab.id, content);
 		if (text.trim() === '') {
@@ -217,7 +244,7 @@
 		}
 		// Until it is indexed, what the engine keeps is an older version.
 		tab.indexed = false;
-		controller?.load(tab.id, content, { keepView: true });
+		controller?.load(tab.id, content, { format: tab.type, keepView: true });
 	}
 
 	/** Re-indents the document in the editor, if its type has a formatter. Text that is not valid is left as it is. */
@@ -253,11 +280,41 @@
 			choice === AUTO
 				? detect(tab.name, tab.file || readingText ? '' : (editor?.head(SNIFF_LENGTH) ?? ''))
 				: documentType(choice);
-		// Saved again, as content of its new type.
-		if (setType(type, choice !== AUTO) && !readingText) {
-			saver?.content(tab.id, contentBlob(tab.file ?? editor?.text ?? '', type), true);
-		}
+		if (!setType(type, choice !== AUTO) || readingText) return;
+		// Saved again as content of its new type, and read again as one.
+		saver?.content(tab.id, contentBlob(tab.file ?? editor?.text ?? '', type), true);
+		refreshTable();
+		tab.indexed = false;
+		// A graph of another shape: it starts from the starting view.
+		tab.view = null;
+		reindex();
 	}
+
+	/** Gives the table the text of the tab on screen, when that is a CSV. */
+	function refreshTable(text = tab.file ? null : (editor?.text ?? '')) {
+		tableText = tab.type === 'csv' ? text : null;
+	}
+
+	const showGraph = $derived(!graphHidden);
+	/** Only a CSV has a table. */
+	const showTable = $derived(isCsv && !tableHidden);
+	const showView = $derived(showGraph || showTable);
+
+	/**
+	 * Lays the panes out for what is shown. Untracked: the panes read their
+	 * own state, and this would otherwise run again, and undo, whenever a pane
+	 * is dragged to another size.
+	 */
+	$effect(() => {
+		const [graph, table, view] = [showGraph, showTable, showView];
+		untrack(() => {
+			if (view) viewPane?.expand();
+			else viewPane?.collapse();
+			if (graph && table) tablePane?.resize(tableSize);
+			else if (graph) tablePane?.collapse();
+			else if (table) graphPane?.collapse();
+		});
+	});
 
 	/** Removes the graph: an empty document has none, and is not an error. */
 	function clearGraph() {
@@ -278,6 +335,7 @@
 		readingText = null;
 		editor?.setText('');
 		setType(DEFAULT_TYPE, false);
+		refreshTable('');
 		saver?.content(tab.id, contentBlob('', DEFAULT_TYPE), true);
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
@@ -324,12 +382,14 @@
 			readingText = saved;
 			editor?.restore('', language);
 			empty = true;
+			refreshTable('');
 			saved.text().then(
 				(text) => {
 					if (shown !== showing || readingText !== saved) return;
 					readingText = null;
 					editor?.restore(text, language);
 					empty = editor?.empty ?? true;
+					refreshTable(text);
 					reindex();
 				},
 				() => {
@@ -341,6 +401,7 @@
 		} else {
 			editor?.restore(saved ?? '', language);
 			empty = editor?.empty ?? true;
+			refreshTable();
 			reindex();
 		}
 		discardIdle();
@@ -350,11 +411,13 @@
 	function reindex() {
 		if (tab.indexed || tab.lost) return;
 		if (tab.file) {
-			controller?.load(tab.id, tab.file, { view: tab.view });
+			controller?.load(tab.id, tab.file, { format: tab.type, view: tab.view });
 			return;
 		}
 		const text = editor?.text ?? '';
-		if (text.trim()) controller?.load(tab.id, contentBlob(text, docType), { view: tab.view });
+		if (text.trim()) {
+			controller?.load(tab.id, contentBlob(text, docType), { format: tab.type, view: tab.view });
+		}
 	}
 
 	/**
@@ -589,11 +652,12 @@
 		const type = documentType(target.type);
 		// The file itself is kept: storing it does not read it on this thread.
 		saver?.content(target.id, contentBlob(file, type), true);
-		controller?.load(target.id, file);
+		controller?.load(target.id, file, { format: type.id });
 		if (file.size > EDITOR_LIMIT) {
 			target.file = file;
 			stats = null;
 			editor?.setText('');
+			if (target.id === activeId) refreshTable(null);
 			return;
 		}
 		const text = await file.text();
@@ -603,9 +667,10 @@
 			return;
 		}
 		editor?.setText(text);
+		refreshTable(text);
 		// Shown again before its text was read, the tab has no graph yet.
 		if (shown !== since) {
-			controller?.load(target.id, contentBlob(text, type), { view: target.view });
+			controller?.load(target.id, contentBlob(text, type), { format: type.id, view: target.view });
 		}
 	}
 
@@ -661,17 +726,53 @@
 		URL.revokeObjectURL(link.href);
 	}
 
+	/** What the toolbar over the graph does, and its right-click menu, with the keys that do it too. */
 	const tools = [
-		{ label: 'Zoom in', icon: ZoomInIcon, run: () => controller?.zoomBy(ZOOM_STEP) },
-		{ label: 'Zoom out', icon: ZoomOutIcon, run: () => controller?.zoomBy(1 / ZOOM_STEP) },
-		{ label: 'Fit to view', icon: MaximizeIcon, run: () => controller?.fit() }
+		{ label: 'Zoom in', icon: ZoomInIcon, key: '+', run: () => controller?.zoomBy(ZOOM_STEP) },
+		{
+			label: 'Zoom out',
+			icon: ZoomOutIcon,
+			key: '−',
+			run: () => controller?.zoomBy(1 / ZOOM_STEP)
+		},
+		{ label: 'Fit to view', icon: MaximizeIcon, key: '0', run: () => controller?.fit() }
 	];
+	/** Whether the choices of the export are open, as the right-click menu can ask. */
+	let exportOpen = $state(false);
 
 	function toggleAll() {
 		allCollapsed = !allCollapsed;
 		controller?.collapseAll(allCollapsed);
 	}
 </script>
+
+{#snippet paneToggle(
+	name: string,
+	shown: boolean,
+	controls: string,
+	disabled: boolean,
+	toggle: () => void,
+	HideIcon: typeof PanelLeftCloseIcon,
+	ShowIcon: typeof PanelLeftOpenIcon
+)}
+	<Tooltip.Root>
+		<Tooltip.Trigger
+			class={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
+			aria-label="{shown ? 'Hide' : 'Show'} {name}"
+			aria-controls={controls}
+			aria-expanded={shown}
+			{disabled}
+			onclick={toggle}
+		>
+			{#if shown}
+				<HideIcon />
+			{:else}
+				<ShowIcon />
+			{/if}
+		</Tooltip.Trigger>
+		<Tooltip.Content>{shown ? 'Hide' : 'Show'} {name}</Tooltip.Content>
+	</Tooltip.Root>
+{/snippet}
 
 <svelte:head>
 	<title>{SITE.title}</title>
@@ -808,7 +909,6 @@
 					bind:this={sourcePane}
 					defaultSize={28}
 					minSize={12}
-					maxSize={70}
 					collapsible
 					collapsedSize={0}
 					onCollapse={() => (sourceHidden = true)}
@@ -856,134 +956,212 @@
 				<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
 
 				<!-- Sized like the other pane: before the page's script runs, a pane has only this to go by. -->
-				<Resizable.Pane defaultSize={72}>
-					<section class="relative h-full" aria-label="Graph">
-						<!--
-						The canvas takes the keys that move the view (see GraphController),
-						which no standard widget does: that is what the application role is for.
-					-->
-						<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
-						<canvas
-							{@attach graph}
-							id="graph"
-							class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
-							role="application"
-							tabindex="0"
-							aria-label={graphLabel}
-							aria-describedby="graph-help"
-						></canvas>
-
-						<div
-							class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
-							role="toolbar"
-							aria-label="Graph view"
-							aria-orientation="vertical"
+				<Resizable.Pane
+					bind:this={viewPane}
+					defaultSize={72}
+					minSize={20}
+					collapsible
+					collapsedSize={0}
+					onCollapse={() => {
+						graphHidden = true;
+						if (isCsv) tableHidden = true;
+					}}
+					onExpand={() => {
+						// Dragged open: the graph comes back.
+						if (!showView) graphHidden = false;
+					}}
+				>
+					<Resizable.PaneGroup direction="vertical">
+						<Resizable.Pane
+							bind:this={graphPane}
+							defaultSize={100}
+							minSize={20}
+							collapsible
+							collapsedSize={0}
+							onCollapse={() => (graphHidden = true)}
+							onExpand={() => (graphHidden = false)}
 						>
-							{#each tools as tool (tool.label)}
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									disabled={!stats}
-									aria-label={tool.label}
-									title={tool.label}
-									onclick={tool.run}
+							<section id="graph-view" class="relative h-full" aria-label="Graph">
+								<!-- Its right-click menu does what the toolbar does; without a graph, it is the browser's. -->
+								<ContextMenu.Root>
+									<ContextMenu.Trigger class="absolute inset-0" disabled={!stats}>
+										<!--
+							The canvas takes the keys that move the view (see GraphController),
+							which no standard widget does: that is what the application role is for.
+						-->
+										<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+										<canvas
+											{@attach graph}
+											id="graph"
+											class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
+											role="application"
+											tabindex="0"
+											aria-label={graphLabel}
+											aria-describedby="graph-help"
+										></canvas>
+									</ContextMenu.Trigger>
+									<ContextMenu.Content class="min-w-52">
+										{#each tools as tool (tool.label)}
+											<ContextMenu.Item onSelect={tool.run}>
+												<tool.icon />
+												{tool.label}
+												<ContextMenu.Shortcut>{tool.key}</ContextMenu.Shortcut>
+											</ContextMenu.Item>
+										{/each}
+										<ContextMenu.Item onSelect={toggleAll}>
+											{#if allCollapsed}
+												<ChevronsUpDownIcon />
+												Expand all nodes
+											{:else}
+												<ChevronsDownUpIcon />
+												Collapse all nodes
+											{/if}
+										</ContextMenu.Item>
+										<ContextMenu.Separator />
+										<ContextMenu.Item onSelect={() => (exportOpen = true)}>
+											<ImageDownIcon />
+											Export as image…
+										</ContextMenu.Item>
+									</ContextMenu.Content>
+								</ContextMenu.Root>
+
+								<div
+									class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
+									role="toolbar"
+									aria-label="Graph view"
+									aria-orientation="vertical"
 								>
-									<tool.icon />
-								</Button>
-							{/each}
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								disabled={!stats}
-								aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-								title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-								onclick={toggleAll}
-							>
-								{#if allCollapsed}
-									<ChevronsUpDownIcon />
-								{:else}
-									<ChevronsDownUpIcon />
+									{#each tools as tool (tool.label)}
+										<Button
+											variant="ghost"
+											size="icon-sm"
+											disabled={!stats}
+											aria-label={tool.label}
+											title={tool.label}
+											onclick={tool.run}
+										>
+											<tool.icon />
+										</Button>
+									{/each}
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										disabled={!stats}
+										aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+										title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+										onclick={toggleAll}
+									>
+										{#if allCollapsed}
+											<ChevronsUpDownIcon />
+										{:else}
+											<ChevronsDownUpIcon />
+										{/if}
+									</Button>
+									<ExportMenu disabled={!stats} bind:open={exportOpen} onexport={exportImage} />
+								</div>
+
+								{#if progress}
+									<div
+										class="absolute inset-x-0 top-0 h-1 bg-muted"
+										role="progressbar"
+										aria-label={progress.label}
+										aria-valuemin={0}
+										aria-valuemax={100}
+										aria-valuenow={Math.round(progress.fraction * 100)}
+									>
+										<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
+									</div>
 								{/if}
-							</Button>
-							<ExportMenu disabled={!stats} onexport={exportImage} />
-						</div>
 
-						{#if progress}
-							<div
-								class="absolute inset-x-0 top-0 h-1 bg-muted"
-								role="progressbar"
-								aria-label={progress.label}
-								aria-valuemin={0}
-								aria-valuemax={100}
-								aria-valuenow={Math.round(progress.fraction * 100)}
-							>
-								<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
-							</div>
-						{/if}
+								{#if engineError !== null}
+									<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
+										<p class="max-w-sm text-destructive" role="alert">
+											The graph engine could not be loaded, so no graph can be drawn: {engineError}.
+											Reload the page to try again.
+										</p>
+									</div>
+								{:else if !engineReady}
+									<p
+										class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
+										role="status"
+									>
+										<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+										Loading the graph engine…
+									</p>
+								{:else if !stats && !progress && !error && tooLarge === null && !readingText && !tab.lost}
+									<div
+										class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
+									>
+										<p class="max-w-xs text-muted-foreground">
+											{#if sourceHidden}
+												Open a file, or drop one anywhere on the page.
+											{:else}
+												Type or paste on the left, open a file, or drop one anywhere on the page.
+											{/if}
+											<span class="font-medium text-foreground">Example</span> loads a sample document.
+										</p>
+									</div>
+								{/if}
 
-						{#if engineError !== null}
-							<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
-								<p class="max-w-sm text-destructive" role="alert">
-									The graph engine could not be loaded, so no graph can be drawn: {engineError}.
-									Reload the page to try again.
+								<p
+									id="graph-help"
+									class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+								>
+									Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide
+									the next one · click a shortened value to expand it
+									<span class="sr-only">
+										With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the
+										graph.
+									</span>
 								</p>
-							</div>
-						{:else if !engineReady}
-							<p
-								class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
-								role="status"
-							>
-								<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
-								Loading the graph engine…
-							</p>
-						{:else if !stats && !progress && !error && tooLarge === null && !readingText && !tab.lost}
-							<div
-								class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
-							>
-								<p class="max-w-xs text-muted-foreground">
-									{#if sourceHidden}
-										Open a file, or drop one anywhere on the page.
-									{:else}
-										Type or paste on the left, open a file, or drop one anywhere on the page.
-									{/if}
-									<span class="font-medium text-foreground">Example</span> loads a sample document.
-								</p>
-							</div>
-						{/if}
-
-						<p
-							id="graph-help"
-							class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+							</section>
+						</Resizable.Pane>
+						<Resizable.Handle
+							withHandle
+							class={isCsv ? undefined : 'hidden'}
+							aria-label="Resize the graph and the table"
+						/>
+						<!-- Below the graph of a CSV, and put away for other documents. -->
+						<Resizable.Pane
+							bind:this={tablePane}
+							defaultSize={0}
+							minSize={15}
+							collapsible
+							collapsedSize={0}
+							onResize={(size) => {
+								// Its size beside the graph, to come back to.
+								if (size > 0 && size < 100) tableSize = size;
+							}}
+							onCollapse={() => {
+								if (isCsv) tableHidden = true;
+							}}
+							onExpand={() => {
+								if (isCsv) tableHidden = false;
+							}}
 						>
-							Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide the
-							next one · click a shortened value to expand it
-							<span class="sr-only">
-								With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the graph.
-							</span>
-						</p>
-					</section>
+							<section id="table" class="h-full" aria-label="Table">
+								{#if isCsv}
+									<CsvTable text={tableText} />
+								{/if}
+							</section>
+						</Resizable.Pane>
+					</Resizable.PaneGroup>
 				</Resizable.Pane>
 			</Resizable.PaneGroup>
 		</main>
 	</div>
 
 	<footer class="flex items-center gap-2 border-t px-2 py-1 text-xs">
-		<Tooltip.Root>
-			<Tooltip.Trigger
-				class={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
-				aria-label={sourceHidden ? 'Show editor' : 'Hide editor'}
-				aria-controls="source"
-				aria-expanded={!sourceHidden}
-				onclick={() => (sourceHidden ? sourcePane?.expand() : sourcePane?.collapse())}
-			>
-				{#if sourceHidden}
-					<PanelLeftOpenIcon />
-				{:else}
-					<PanelLeftCloseIcon />
-				{/if}
-			</Tooltip.Trigger>
-			<Tooltip.Content>{sourceHidden ? 'Show editor' : 'Hide editor'}</Tooltip.Content>
-		</Tooltip.Root>
+		<!-- Whatever is shown last cannot be hidden. -->
+		{@render paneToggle(
+			'editor',
+			!sourceHidden,
+			'source',
+			!sourceHidden && !showView,
+			() => (sourceHidden ? sourcePane?.expand() : sourcePane?.collapse()),
+			PanelLeftCloseIcon,
+			PanelLeftOpenIcon
+		)}
 		<DropdownMenu.Root>
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -1050,6 +1228,27 @@
 				Tabs in this window are not kept, because another window keeps its own
 			{/if}
 		</p>
+		<!-- On the side of what they show, as the editor's is on its side. -->
+		{@render paneToggle(
+			'graph',
+			showGraph,
+			'graph-view',
+			showGraph && !showTable && sourceHidden,
+			() => (graphHidden = !graphHidden),
+			isCsv ? PanelTopCloseIcon : PanelRightCloseIcon,
+			isCsv ? PanelTopOpenIcon : PanelRightOpenIcon
+		)}
+		{#if isCsv}
+			{@render paneToggle(
+				'table',
+				showTable,
+				'table',
+				showTable && !showGraph && sourceHidden,
+				() => (tableHidden = !tableHidden),
+				PanelBottomCloseIcon,
+				PanelBottomOpenIcon
+			)}
+		{/if}
 	</footer>
 
 	<AlertDialog.Root
