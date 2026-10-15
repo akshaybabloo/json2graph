@@ -2,9 +2,12 @@ import { json } from '@codemirror/lang-json';
 import type { Extension } from '@codemirror/state';
 import sampleCsv from './assets/sample.csv?raw';
 import sampleJson from './assets/sample.json?raw';
+import sampleMermaid from './assets/sample.mmd?raw';
 import sampleYaml from './assets/sample.yaml?raw';
 import { looksLikeCsv } from './csv/csv';
 import { csvLanguage } from './csv/language';
+import { looksLikeMermaid } from './mermaid/detect';
+import { mermaidLanguage } from './mermaid/language';
 import { yamlLanguage } from './yaml/language';
 
 /** A kind of document the editor holds, and what the app does with it. */
@@ -76,8 +79,25 @@ const YAML_TYPE: DocumentType = {
 	example: { name: 'service.yaml', text: sampleYaml }
 };
 
+/** A diagram, which is drawn rather than shown as a graph. */
+const MERMAID_TYPE: DocumentType = {
+	id: 'mermaid',
+	label: 'Mermaid',
+	mime: 'text/vnd.mermaid',
+	extensions: ['.mmd', '.mermaid'],
+	language: mermaidLanguage,
+	// Surer than YAML, whose front matter a diagram can start with.
+	sniff: (text) => (looksLikeMermaid(text) ? 0.9 : 0),
+	example: { name: 'flow.mmd', text: sampleMermaid }
+};
+
 /** Every type a document can be, in the order they are offered. */
-export const DOCUMENT_TYPES: readonly DocumentType[] = [JSON_TYPE, CSV_TYPE, YAML_TYPE];
+export const DOCUMENT_TYPES: readonly DocumentType[] = [
+	JSON_TYPE,
+	CSV_TYPE,
+	YAML_TYPE,
+	MERMAID_TYPE
+];
 
 /** The types that have an example to open. */
 export const EXAMPLES = DOCUMENT_TYPES.filter((type) => type.example);

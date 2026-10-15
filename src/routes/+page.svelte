@@ -23,6 +23,7 @@
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import { version } from '$app/env';
 	import CsvTable from '#lib/components/csv-table.svelte';
+	import DiagramView, { type Diagram } from '#lib/components/diagram-view.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
@@ -47,7 +48,7 @@
 		typeOfName,
 		type DocumentType
 	} from '#lib/document-types.js';
-	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
+	import { GraphController, ZOOM_STEP, type View } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
 	import type { Session, StoredSession } from '#lib/session/protocol.js';
 	import { TabSaver } from '#lib/session/saver.js';
@@ -85,6 +86,7 @@
 	const UNTITLED = 'untitled';
 
 	let controller: GraphController | undefined;
+	let diagramView = $state<DiagramView>();
 	let editor: JsonEditor | undefined;
 	let sourcePane: Pane | undefined;
 	/** The pane of the graph and the table, to the right of the editor. */
@@ -117,6 +119,13 @@
 	const isCsv = $derived(tab.type === 'csv');
 	/** The text of the table: the CSV in the editor, or none for a file too large to hold as text. */
 	let tableText = $state.raw<string | null>(null);
+	/** Whether the document on screen is a Mermaid diagram, which is drawn in place of a graph. */
+	const isDiagram = $derived(tab.type === 'mermaid');
+	/** The text of the diagram: the Mermaid in the editor, or none for a file too large to hold as text. */
+	let diagramText = $state.raw<string | null>(null);
+	/** The diagram on screen, once one is drawn, and whether one is being drawn. */
+	let diagram = $state<Diagram | null>(null);
+	let drawing = $state(false);
 	/** The saved text of the tab on screen while it is read back, before it is in the editor. */
 	let readingText = $state<Blob | null>(null);
 	/** Whether the saved tabs are being brought back, which the page waits for. */
@@ -169,8 +178,15 @@
 			].join(' · ')
 	);
 
-	/** What the header says about the graph: the step under way, or the summary. */
-	const status = $derived(progress ? `${progress.label}…` : summary);
+	/** Size, kind and drawing time of the diagram on screen. */
+	const diagramSummary = $derived(
+		diagram && [bytes(diagram.bytes), diagram.type, duration(diagram.ms)].join(' · ')
+	);
+
+	/** What the header says about the graph or the diagram: the step under way, or the summary. */
+	const status = $derived(
+		isDiagram ? (drawing ? 'Drawing…' : diagramSummary) : progress ? `${progress.label}…` : summary
+	);
 
 	/** What the graph is, for those who cannot see the canvas. */
 	const graphLabel = $derived(
@@ -178,6 +194,13 @@
 			? `Graph${name ? ` of ${name}` : ''}: ${count(stats.boxes, 'node')}, ${count(stats.values, 'value')}`
 			: 'Graph: no document'
 	);
+	const diagramLabel = $derived(
+		diagram ? `Diagram${name ? ` of ${name}` : ''}: ${diagram.type}` : 'Diagram: no document'
+	);
+	/** Whether there is a graph or a diagram on screen to move, zoom and export. */
+	const hasView = $derived(isDiagram ? diagram !== null : stats !== null);
+	/** What the view is called on screen. */
+	const viewName = $derived(isDiagram ? 'diagram' : 'graph');
 
 	function bytes(n: number): string {
 		if (n < 1024) return `${n} B`;
@@ -245,7 +268,7 @@
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
 		if (!tab.typeChosen) setType(detect(tab.name, text), false);
-		refreshTable(text);
+		refreshText(text);
 		const content = contentBlob(text, docType);
 		saver?.content(tab.id, content);
 		if (text.trim() === '') {
@@ -254,7 +277,24 @@
 		}
 		// Until it is indexed, what the engine keeps is an older version.
 		tab.indexed = false;
-		controller?.load(tab.id, content, { format: tab.type, keepView: true });
+		loadGraph(tab, content, { keepView: true });
+	}
+
+	/**
+	 * Indexes `data` as the document of `target`, and shows its graph when the
+	 * tab is on screen. A diagram has no graph: the diagram view draws it from
+	 * its text, so any graph the tab had before it was a diagram goes.
+	 */
+	function loadGraph(target: Tab, data: Blob, options: { keepView?: boolean; view?: View | null }) {
+		if (target.type !== 'mermaid') {
+			controller?.load(target.id, data, { format: target.type, ...options });
+		} else if (target.id === activeId) {
+			stats = null;
+			progress = null;
+			controller?.clear(target.id);
+		} else {
+			controller?.discard(target.id);
+		}
 	}
 
 	/** Re-indents the document in the editor, if its type has a formatter. Text that is not valid is left as it is. */
@@ -296,16 +336,17 @@
 		if (!setType(type, choice !== AUTO) || readingText) return;
 		// Saved again as content of its new type, and read again as one.
 		saver?.content(tab.id, contentBlob(tab.file ?? editor?.text ?? '', type), true);
-		refreshTable();
+		refreshText();
 		tab.indexed = false;
 		// A graph of another shape: it starts from the starting view.
 		tab.view = null;
 		reindex();
 	}
 
-	/** Gives the table the text of the tab on screen, when that is a CSV. */
-	function refreshTable(text = tab.file ? null : (editor?.text ?? '')) {
+	/** Gives the table or the diagram view the text of the tab on screen, when that is a CSV or a diagram. */
+	function refreshText(text = tab.file ? null : (editor?.text ?? '')) {
 		tableText = tab.type === 'csv' ? text : null;
+		diagramText = tab.type === 'mermaid' ? text : null;
 	}
 
 	/** Only a CSV has a table. */
@@ -352,7 +393,7 @@
 		readingText = null;
 		editor?.setText('');
 		setType(DEFAULT_TYPE, false);
-		refreshTable('');
+		refreshText('');
 		saver?.content(tab.id, contentBlob('', DEFAULT_TYPE), true);
 		clearGraph();
 		// The button is now disabled, and would drop the focus it has.
@@ -388,6 +429,8 @@
 		const current = tab;
 		current.discarded = false;
 		stats = null;
+		diagram = null;
+		drawing = false;
 		progress = null;
 		error = current.error;
 		allCollapsed = current.allCollapsed;
@@ -399,14 +442,14 @@
 			readingText = saved;
 			editor?.restore('', language);
 			empty = true;
-			refreshTable('');
+			refreshText('');
 			saved.text().then(
 				(text) => {
 					if (shown !== showing || readingText !== saved) return;
 					readingText = null;
 					editor?.restore(text, language);
 					empty = editor?.empty ?? true;
-					refreshTable(text);
+					refreshText(text);
 					reindex();
 				},
 				() => {
@@ -418,7 +461,7 @@
 		} else {
 			editor?.restore(saved ?? '', language);
 			empty = editor?.empty ?? true;
-			refreshTable();
+			refreshText();
 			reindex();
 		}
 		discardIdle();
@@ -428,13 +471,11 @@
 	function reindex() {
 		if (tab.indexed || tab.lost) return;
 		if (tab.file) {
-			controller?.load(tab.id, tab.file, { format: tab.type, view: tab.view });
+			loadGraph(tab, tab.file, { view: tab.view });
 			return;
 		}
 		const text = editor?.text ?? '';
-		if (text.trim()) {
-			controller?.load(tab.id, contentBlob(text, docType), { format: tab.type, view: tab.view });
-		}
+		if (text.trim()) loadGraph(tab, contentBlob(text, docType), { view: tab.view });
 	}
 
 	/**
@@ -669,12 +710,12 @@
 		const type = documentType(target.type);
 		// The file itself is kept: storing it does not read it on this thread.
 		saver?.content(target.id, contentBlob(file, type), true);
-		controller?.load(target.id, file, { format: type.id });
+		loadGraph(target, file, {});
 		if (file.size > EDITOR_LIMIT) {
 			target.file = file;
 			stats = null;
 			editor?.setText('');
-			if (target.id === activeId) refreshTable(null);
+			if (target.id === activeId) refreshText(null);
 			return;
 		}
 		const text = await file.text();
@@ -684,10 +725,10 @@
 			return;
 		}
 		editor?.setText(text);
-		refreshTable(text);
+		refreshText(text);
 		// Shown again before its text was read, the tab has no graph yet.
 		if (shown !== since) {
-			controller?.load(target.id, contentBlob(text, type), { format: type.id, view: target.view });
+			loadGraph(target, contentBlob(text, type), { view: target.view });
 		}
 	}
 
@@ -734,7 +775,7 @@
 
 	/** Saves the graph as a PNG named after the document, less the extension of its type. */
 	async function exportImage(options: ExportOptions) {
-		const blob = await controller?.exportImage(options);
+		const blob = await (isDiagram ? diagramView : controller)?.exportImage(options);
 		if (!blob) return;
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
@@ -746,15 +787,20 @@
 
 	/** What the toolbar over the graph does, and its right-click menu, with the keys that do it too. */
 	const tools = [
-		{ label: 'Zoom in', icon: ZoomInIcon, key: '+', run: () => controller?.zoomBy(ZOOM_STEP) },
+		{ label: 'Zoom in', icon: ZoomInIcon, key: '+', run: () => viewer()?.zoomBy(ZOOM_STEP) },
 		{
 			label: 'Zoom out',
 			icon: ZoomOutIcon,
 			key: '−',
-			run: () => controller?.zoomBy(1 / ZOOM_STEP)
+			run: () => viewer()?.zoomBy(1 / ZOOM_STEP)
 		},
-		{ label: 'Fit to view', icon: MaximizeIcon, key: '0', run: () => controller?.fit() }
+		{ label: 'Fit to view', icon: MaximizeIcon, key: '0', run: () => viewer()?.fit() }
 	];
+
+	/** What the toolbar moves: the diagram, or else the graph. */
+	function viewer() {
+		return isDiagram ? diagramView : controller;
+	}
 	/** Whether the choices of the export are open, as the right-click menu can ask. */
 	let exportOpen = $state(false);
 
@@ -999,10 +1045,14 @@
 							onCollapse={() => (graphHidden = true)}
 							onExpand={() => (graphHidden = false)}
 						>
-							<section id="graph-view" class="relative h-full" aria-label="Graph">
+							<section
+								id="graph-view"
+								class="relative h-full"
+								aria-label={isDiagram ? 'Diagram' : 'Graph'}
+							>
 								<!-- Its right-click menu does what the toolbar does; without a graph, it is the browser's. -->
 								<ContextMenu.Root>
-									<ContextMenu.Trigger class="absolute inset-0" disabled={!stats}>
+									<ContextMenu.Trigger class="absolute inset-0" disabled={!hasView}>
 										<!--
 							The canvas takes the keys that move the view (see GraphController),
 							which no standard widget does: that is what the application role is for.
@@ -1011,12 +1061,39 @@
 										<canvas
 											{@attach graph}
 											id="graph"
-											class="absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2"
+											class={[
+												'absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2',
+												// Kept, at its size, under a diagram: other tabs have graphs.
+												isDiagram && 'invisible'
+											]}
 											role="application"
 											tabindex="0"
 											aria-label={graphLabel}
 											aria-describedby="graph-help"
 										></canvas>
+										{#if isDiagram}
+											<!-- A view of its own for each tab, which starts with the whole diagram. -->
+											{#key activeId}
+												<DiagramView
+													bind:this={diagramView}
+													text={diagramText}
+													label={diagramLabel}
+													describedby="graph-help"
+													ondrawing={() => (drawing = true)}
+													ondrawn={(drawn) => {
+														drawing = false;
+														diagram = drawn;
+														error = null;
+													}}
+													onfailed={(message) => {
+														drawing = false;
+														error = message;
+														// The error is shown under the editor.
+														sourcePane?.expand();
+													}}
+												/>
+											{/key}
+										{/if}
 									</ContextMenu.Trigger>
 									<ContextMenu.Content class="min-w-52">
 										{#each tools as tool (tool.label)}
@@ -1026,15 +1103,17 @@
 												<ContextMenu.Shortcut>{tool.key}</ContextMenu.Shortcut>
 											</ContextMenu.Item>
 										{/each}
-										<ContextMenu.Item onSelect={toggleAll}>
-											{#if allCollapsed}
-												<ChevronsUpDownIcon />
-												Expand all nodes
-											{:else}
-												<ChevronsDownUpIcon />
-												Collapse all nodes
-											{/if}
-										</ContextMenu.Item>
+										{#if !isDiagram}
+											<ContextMenu.Item onSelect={toggleAll}>
+												{#if allCollapsed}
+													<ChevronsUpDownIcon />
+													Expand all nodes
+												{:else}
+													<ChevronsDownUpIcon />
+													Collapse all nodes
+												{/if}
+											</ContextMenu.Item>
+										{/if}
 										<ContextMenu.Separator />
 										<ContextMenu.Item onSelect={() => (exportOpen = true)}>
 											<ImageDownIcon />
@@ -1046,14 +1125,14 @@
 								<div
 									class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
 									role="toolbar"
-									aria-label="Graph view"
+									aria-label={isDiagram ? 'Diagram view' : 'Graph view'}
 									aria-orientation="vertical"
 								>
 									{#each tools as tool (tool.label)}
 										<Button
 											variant="ghost"
 											size="icon-sm"
-											disabled={!stats}
+											disabled={!hasView}
 											aria-label={tool.label}
 											title={tool.label}
 											onclick={tool.run}
@@ -1061,24 +1140,26 @@
 											<tool.icon />
 										</Button>
 									{/each}
-									<Button
-										variant="ghost"
-										size="icon-sm"
-										disabled={!stats}
-										aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-										title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-										onclick={toggleAll}
-									>
-										{#if allCollapsed}
-											<ChevronsUpDownIcon />
-										{:else}
-											<ChevronsDownUpIcon />
-										{/if}
-									</Button>
-									<ExportMenu disabled={!stats} bind:open={exportOpen} onexport={exportImage} />
+									{#if !isDiagram}
+										<Button
+											variant="ghost"
+											size="icon-sm"
+											disabled={!stats}
+											aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+											title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+											onclick={toggleAll}
+										>
+											{#if allCollapsed}
+												<ChevronsUpDownIcon />
+											{:else}
+												<ChevronsDownUpIcon />
+											{/if}
+										</Button>
+									{/if}
+									<ExportMenu disabled={!hasView} bind:open={exportOpen} onexport={exportImage} />
 								</div>
 
-								{#if progress}
+								{#if progress && !isDiagram}
 									<div
 										class="absolute inset-x-0 top-0 h-1 bg-muted"
 										role="progressbar"
@@ -1091,7 +1172,9 @@
 									</div>
 								{/if}
 
-								{#if engineError !== null}
+								{#if isDiagram}
+									<!-- The diagram view says what it is doing. -->
+								{:else if engineError !== null}
 									<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
 										<p class="max-w-sm text-destructive" role="alert">
 											The graph engine could not be loaded, so no graph can be drawn: {engineError}.
@@ -1106,7 +1189,8 @@
 										<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
 										Loading the graph engine…
 									</p>
-								{:else if !stats && !progress && !error && tooLarge === null && !readingText && !tab.lost}
+								{/if}
+								{#if !hasView && !drawing && (isDiagram || (engineReady && !progress)) && !error && tooLarge === null && !readingText && !tab.lost}
 									<div
 										class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
 									>
@@ -1125,11 +1209,15 @@
 									id="graph-help"
 									class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
 								>
-									Drag to pan · scroll to zoom · click + or − on the edge of a node to show or hide
-									the next one · click a shortened value to expand it
+									{#if isDiagram}
+										Drag to pan · scroll to zoom
+									{:else}
+										Drag to pan · scroll to zoom · click + or − on the edge of a node to show or
+										hide the next one · click a shortened value to expand it
+									{/if}
 									<span class="sr-only">
 										With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the
-										graph.
+										{viewName}.
 									</span>
 								</p>
 							</section>
@@ -1254,7 +1342,7 @@
 		</p>
 		<!-- On the side of what they show, as the editor's is on its side. -->
 		{@render paneToggle(
-			'graph',
+			viewName,
 			showGraph,
 			'graph-view',
 			showGraph && !showTable && sourceHidden,

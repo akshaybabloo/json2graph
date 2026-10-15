@@ -1,0 +1,17 @@
+---
+title: How json2graph shows a document
+---
+flowchart LR
+    %% Where a document comes from
+    open[Open a file] --> detect{What type is it?}
+    type[Type or paste] --> detect
+
+    detect -->|JSON| engine[Index it in the engine]
+    detect -->|YAML| convert[Convert it to JSON] --> engine
+    detect -->|CSV| engine
+    detect -->|CSV| table[(Show a table)]
+    detect -->|Mermaid| diagram[Draw the diagram]
+
+    engine --> drawn([Draw the graph])
+    drawn --> export[/Export as an image/]
+    diagram --> export
