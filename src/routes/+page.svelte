@@ -40,7 +40,7 @@
 	} from '#lib/document-types.js';
 	import { GraphController, ZOOM_STEP } from '#lib/graph/controller.js';
 	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
-	import type { Session } from '#lib/session/protocol.js';
+	import type { Session, StoredSession } from '#lib/session/protocol.js';
 	import { TabSaver } from '#lib/session/saver.js';
 	import { SessionStore } from '#lib/session/store.js';
 	import { SITE } from '#lib/site.js';
@@ -446,7 +446,7 @@
 	 * storage until it is shown. The empty tab the page starts with makes way
 	 * for them; anything opened before they were back stays, after them.
 	 */
-	function restore(session: Session, contents: Map<number, Blob>) {
+	function restore(session: StoredSession, contents: Map<number, Blob>) {
 		const pristine =
 			tabs.length === 1 && name === null && tooLarge === null && empty && !readingText;
 		let next = Math.max(tabCount, ...session.tabs.map((record) => record.id));
@@ -576,12 +576,17 @@
 		const since = shown;
 		target.name = file.name;
 		error = null;
-		// What the name of the file says it is, or else what it starts with.
-		const type = typeOfName(file.name) ?? detect(null, await file.slice(0, SNIFF_LENGTH).text());
-		if (target.reading !== id || !tabs.includes(target)) return;
-		target.type = type.id;
+		// A new document has its type detected again, unless one is chosen while it is read.
 		target.typeChosen = false;
-		if (target.id === activeId) editor?.setLanguage(type.language());
+		// What the name of the file says it is, or else what it starts with.
+		const detected =
+			typeOfName(file.name) ?? detect(null, await file.slice(0, SNIFF_LENGTH).text());
+		if (target.reading !== id || !tabs.includes(target)) return;
+		if (!target.typeChosen && target.type !== detected.id) {
+			target.type = detected.id;
+			if (target.id === activeId) editor?.setLanguage(detected.language());
+		}
+		const type = documentType(target.type);
 		// The file itself is kept: storing it does not read it on this thread.
 		saver?.content(target.id, contentBlob(file, type), true);
 		controller?.load(target.id, file);

@@ -1,7 +1,6 @@
 import { json } from '@codemirror/lang-json';
 import type { Extension } from '@codemirror/state';
 import sampleJson from './assets/sample.json?raw';
-import { formatJson } from './format/format';
 
 /** A kind of document the editor holds, and what the app does with it. */
 export interface DocumentType {
@@ -32,7 +31,8 @@ const JSON_TYPE: DocumentType = {
 	extensions: ['.json'],
 	language: () => json(),
 	sniff: (text) => (/^\s*[[{]/.test(text) ? 1 : 0),
-	format: formatJson,
+	// Loaded when it is first used: nothing else needs the formatter.
+	format: async (text) => (await import('./format/format')).formatJson(text),
 	example: { name: 'sample.json', text: sampleJson }
 };
 
