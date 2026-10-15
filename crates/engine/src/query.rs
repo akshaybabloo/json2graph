@@ -26,6 +26,12 @@ const CLIP_MARGIN: f64 = 256.0;
 /// themselves off screen.
 const MAX_FAN: usize = 256;
 const MAX_ROWS: usize = 50_000;
+/// The furthest apart the lanes of sharp edges are, in world pixels: closer
+/// when there are too many for the gap.
+const LANE_GAP: f64 = 8.0;
+/// How far the lanes keep from the boxes on either side of the gap, which
+/// leaves room for the arrowhead and for the control on the edge of a box.
+const LANE_MARGIN: f64 = 14.0;
 
 /// Number of `u32` words per entry of [`Frame::rows`].
 pub const ROW_WORDS: usize = 8;
@@ -72,6 +78,15 @@ pub struct Frame {
     pub slivers: Vec<f32>,
     /// `x1, y1, x2, y2` per edge, from a parent row to the child box.
     pub edges: Vec<f32>,
+    /// Where each edge in [`Frame::edges`] turns when it is drawn sharp: the
+    /// screen `x` of its vertical part. See [`Lanes`].
+    pub edge_bends: Vec<f32>,
+    /// The same for [`Frame::far_edges`].
+    pub far_edge_bends: Vec<f32>,
+    /// The key of the child of each edge in [`Frame::edges`], three words per
+    /// edge: `KEY_NAME, offset, length` for a property, or
+    /// `KEY_INDEX, index, 0` for an element of an array.
+    pub edge_keys: Vec<u32>,
     /// Edges that cross the viewport on their way to a child that is off
     /// screen, in the same format. There can be a great many of these, so
     /// only a sample is emitted, to be drawn as a faint bundle.
@@ -210,9 +225,81 @@ impl Frame {
         self.boxes.clear();
         self.slivers.clear();
         self.edges.clear();
+        self.edge_bends.clear();
+        self.edge_keys.clear();
         self.far_edges.clear();
+        self.far_edge_bends.clear();
         self.rows.clear();
         self.labels.clear();
+    }
+}
+
+/// Where the edge from the row of child `c` in box `b`, whose top is at
+/// `top`, leaves `b`: the centre of that row.
+fn source_y(g: &Graph, m: &Metrics, b: &BoxRec, top: f64, c: &BoxRec) -> f64 {
+    let line = g.row_line(b, c.entry - b.first);
+    top + m.pad_y + (line as f64 + 0.5) * m.row_h
+}
+
+/// Where an edge enters child `c`: the middle of its band.
+fn target_y(c: &BoxRec) -> f64 {
+    c.band_top + c.band_h / 2.0
+}
+
+/// The lanes that the edges from a box to its children turn in when they are
+/// drawn sharp: out of the row, along the lane, and into the child. Each
+/// child has a lane of its own, so no two edges touch. The lanes keep close
+/// to the box, which leaves the long part of each edge, into its child, for
+/// the key of the child.
+///
+/// The children are in the order of their rows, and so are their bands: the
+/// first edges go up to their child, the rest go down. An edge that goes up
+/// turns further right than the edges above it, and one that goes down
+/// further right than those below it, so the edges nearest the turn from up
+/// to down take the rightmost lanes, and none crosses another.
+struct Lanes {
+    /// The first child whose edge goes down, or straight across.
+    pivot: usize,
+    /// How many lanes there are on either side of the rightmost.
+    most: usize,
+    left: f64,
+    step: f64,
+}
+
+impl Lanes {
+    fn new(g: &Graph, m: &Metrics, b: &BoxRec, top: f64, kids: &[BoxRec]) -> Lanes {
+        let pivot = kids.partition_point(|c| target_y(c) < source_y(g, m, b, top, c));
+        let most = pivot.max(kids.len().saturating_sub(pivot + 1));
+        let left = b.x as f64 + b.w as f64 + m.toggle_w / 2.0 + LANE_MARGIN;
+        let right = kids.first().map_or(left, |c| c.x as f64) - LANE_MARGIN;
+        let room = (right - left).max(0.0);
+        let step = if most == 0 {
+            0.0
+        } else {
+            (room / most as f64).min(LANE_GAP)
+        };
+        Lanes {
+            pivot,
+            most,
+            left,
+            step,
+        }
+    }
+
+    /// The world `x` of the lane of child `i`.
+    fn x(&self, i: usize) -> f64 {
+        let from_pivot = i.abs_diff(self.pivot);
+        self.left + (self.most - from_pivot) as f64 * self.step
+    }
+}
+
+/// The key that box `c` has in its parent `b`, as [`Frame::edge_keys`] has it.
+fn edge_key(g: &Graph, b: &BoxRec, c: &BoxRec) -> [u32; 3] {
+    if g.is_array(b) {
+        [KEY_INDEX, c.entry - b.first, 0]
+    } else {
+        let value = &g.values[c.entry as usize];
+        [KEY_NAME, value.key_off, value.key_len()]
     }
 }
 
@@ -282,12 +369,9 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
 
         // An edge leaves the parent at the row that holds the child and enters
         // the child at its vertical centre.
-        let source_y = |c: &BoxRec| {
-            let line = g.row_line(b, c.entry - b.first);
-            top + m.pad_y + (line as f64 + 0.5) * m.row_h
-        };
-        let target_y = |c: &BoxRec| c.band_top + c.band_h / 2.0;
+        let source_y = |c: &BoxRec| source_y(g, m, b, top, c);
         let edge = |c: &BoxRec| [sx(right), sy(source_y(c)), sx(kid_left), sy(target_y(c))];
+        let lanes = Lanes::new(g, m, b, top, kids);
 
         // Children whose band intersects the viewport vertically.
         let start = kids.partition_point(|c| c.band_top + c.band_h < y0);
@@ -302,6 +386,8 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
             let c = &kids[i];
             if gap_visible {
                 f.edges.extend(edge(c));
+                f.edge_bends.push(sx(lanes.x(i)));
+                f.edge_keys.extend(edge_key(g, b, c));
             }
             if kids_visible && c.sub_right as f64 >= x0 {
                 if c.band_h * k < SLIVER_PX {
@@ -335,6 +421,7 @@ pub fn query(g: &Graph, src: &[u8], m: &Metrics, v: &View, f: &mut Frame) {
                 for i in run.step_by(stride) {
                     if !g.is_collapsed(b.child_first + i as u32) {
                         f.far_edges.extend(edge(&kids[i]));
+                        f.far_edge_bends.push(sx(lanes.x(i)));
                     }
                 }
             }
@@ -349,7 +436,8 @@ pub fn query_path(g: &Graph, src: &[u8], m: &Metrics, v: &View, target: u32, f: 
     f.clear();
     let [x0, y0, x1, y1] = v.world();
 
-    let Some(mut b) = g.boxes.get(target as usize) else {
+    let mut id = target;
+    let Some(mut b) = g.boxes.get(id as usize) else {
         return;
     };
     let mut top = g.box_top(b, m);
@@ -363,14 +451,18 @@ pub fn query_path(g: &Graph, src: &[u8], m: &Metrics, v: &View, target: u32, f: 
 
         // The edge between them, as in `query`. It is drawn even when both of
         // its ends are off screen, so the path is never interrupted.
-        let line = g.row_line(parent, b.entry - parent.first);
         let (from_x, to_x) = (parent.x as f64 + parent.w as f64, b.x as f64);
-        let from_y = parent_top + m.pad_y + (line as f64 + 0.5) * m.row_h;
-        let to_y = b.band_top + b.band_h / 2.0;
+        let from_y = source_y(g, m, parent, parent_top, b);
+        let to_y = target_y(b);
         if from_x <= x1 && to_x >= x0 && from_y.min(to_y) <= y1 && from_y.max(to_y) >= y0 {
             f.edges
                 .extend([v.sx(from_x), v.sy(from_y), v.sx(to_x), v.sy(to_y)]);
+            let lanes = Lanes::new(g, m, parent, parent_top, g.children(parent));
+            let index = (id - parent.child_first) as usize;
+            f.edge_bends.push(v.sx(lanes.x(index)));
+            f.edge_keys.extend(edge_key(g, parent, b));
         }
+        id = b.parent;
         (b, top) = (parent, parent_top);
     }
 }

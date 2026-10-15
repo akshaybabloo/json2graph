@@ -18,6 +18,7 @@
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import PanelTopCloseIcon from '@lucide/svelte/icons/panel-top-close';
 	import PanelTopOpenIcon from '@lucide/svelte/icons/panel-top-open';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
@@ -54,6 +55,12 @@
 	import { TabSaver } from '#lib/session/saver.js';
 	import { SessionStore } from '#lib/session/store.js';
 	import { SITE } from '#lib/site.js';
+	import {
+		changeSettings,
+		loadSettings,
+		settings,
+		type Connections
+	} from '#lib/settings.svelte.js';
 	import { toggleTheme } from '#lib/theme.js';
 	import { DROP_TEXT_OVER, newTab, tabLabel, toDiscard, type Tab } from '#lib/workspace.js';
 	import { EditorState } from '@codemirror/state';
@@ -215,6 +222,12 @@
 
 	function graph(canvas: HTMLCanvasElement) {
 		controller = new GraphController(canvas, onEvent);
+		controller.configure(
+			untrack(() => ({
+				connections: settings.connections,
+				connectionKeys: settings.connectionKeys
+			}))
+		);
 		return () => {
 			controller?.destroy();
 			controller = undefined;
@@ -537,16 +550,47 @@
 		if (sessionShape) saver?.session();
 	});
 
+	// The choices kept in this browser, before the tabs are kept by them: the
+	// server renders the page with the defaults.
+	$effect(() => loadSettings());
+
 	$effect(() => {
+		const chosen = { connections: settings.connections, connectionKeys: settings.connectionKeys };
+		controller?.configure(chosen);
+	});
+
+	/** Whether the saved tabs were brought back, or had nothing to bring back, which happens once. */
+	let restoredOnce = false;
+
+	/**
+	 * Keeps the tabs in this browser while Settings say so. The first time,
+	 * the saved tabs come back; when keeping them is turned on later, the tabs
+	 * open then are saved.
+	 */
+	$effect(() => {
+		if (!settings.keepTabs) {
+			// Turned off, nothing is saved to bring back.
+			restoredOnce = true;
+			keepsTabs = false;
+			return;
+		}
 		let closed = false;
-		restoring = true;
+		const first = !restoredOnce;
+		restoredOnce = true;
+		restoring = first;
 		sessionRestored = SessionStore.open().then(async (store) => {
 			if (closed) return store?.destroy();
 			if (!store) {
 				keepsTabs = false;
 				return;
 			}
+			keepsTabs = true;
+			saveError = null;
 			saver = new TabSaver(store, sessionNow, (message) => (saveError = message));
+			if (!first) {
+				saveAll();
+				return;
+			}
 			const { session, contents } = await store.call({ method: 'load' });
 			if (closed) return;
 			if (session) restore(session, new Map(contents));
@@ -561,6 +605,30 @@
 			saver = null;
 		};
 	});
+
+	/** Saves every tab as it is now: keeping the tabs was turned on, with none of them saved. */
+	function saveAll() {
+		for (const t of tabs) {
+			if (t.lost) continue;
+			const saved = t.id === activeId ? (readingText ?? editor?.state ?? null) : t.saved;
+			const content =
+				t.file ?? (saved instanceof EditorState ? saved.doc.toString() : (saved ?? ''));
+			saver?.content(t.id, contentBlob(content, documentType(t.type)), true);
+		}
+		saver?.session();
+	}
+
+	/** Whether to ask before the saved tabs are forgotten, as turning off keeping them does. */
+	let confirmForget = $state(false);
+
+	/** Stops keeping the tabs in this browser, and forgets those it kept. */
+	async function stopKeepingTabs() {
+		confirmForget = false;
+		const leaving = saver;
+		saver = null;
+		changeSettings({ keepTabs: false });
+		await leaving?.forget().catch((error: Error) => (saveError = error.message));
+	}
 
 	/**
 	 * Brings back the saved tabs, each with its content left in the browser's
@@ -906,6 +974,52 @@
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">{status}</p>
+		<DropdownMenu.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<DropdownMenu.Trigger
+							{...props}
+							class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
+							aria-label="Settings"
+						>
+							<SettingsIcon />
+						</DropdownMenu.Trigger>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>Settings</Tooltip.Content>
+			</Tooltip.Root>
+			<DropdownMenu.Content align="end" class="w-64">
+				<DropdownMenu.Label>Connections</DropdownMenu.Label>
+				<DropdownMenu.RadioGroup
+					value={settings.connections}
+					onValueChange={(value) => changeSettings({ connections: value as Connections })}
+				>
+					<DropdownMenu.RadioItem value="curved" closeOnSelect={false}
+						>Curved</DropdownMenu.RadioItem
+					>
+					<DropdownMenu.RadioItem value="sharp" closeOnSelect={false}>Sharp</DropdownMenu.RadioItem>
+				</DropdownMenu.RadioGroup>
+				<DropdownMenu.CheckboxItem
+					checked={settings.connectionKeys}
+					onCheckedChange={(checked) => changeSettings({ connectionKeys: checked })}
+				>
+					Show keys on connections
+				</DropdownMenu.CheckboxItem>
+				<DropdownMenu.Separator />
+				<DropdownMenu.CheckboxItem
+					checked={settings.keepTabs}
+					closeOnSelect
+					onCheckedChange={(checked) => {
+						if (checked) changeSettings({ keepTabs: true });
+						// Asked first: the tabs kept so far are forgotten.
+						else confirmForget = true;
+					}}
+				>
+					Remember tabs in this browser
+				</DropdownMenu.CheckboxItem>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
 		<Button
 			variant="ghost"
 			size="icon-sm"
@@ -1334,6 +1448,8 @@
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
 			{#if saveError}
 				<span class="text-destructive">Some tabs could not be kept: {saveError}</span>
+			{:else if !settings.keepTabs}
+				Tabs are not kept in this browser: Settings can turn that on
 			{:else if keepsTabs}
 				Tabs are kept in this browser until you close them
 			{:else}
@@ -1384,6 +1500,21 @@
 				<AlertDialog.Action onclick={() => placeExample('new')}
 					>Open in a new tab</AlertDialog.Action
 				>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Root>
+
+	<AlertDialog.Root bind:open={confirmForget}>
+		<AlertDialog.Content>
+			<AlertDialog.Header>
+				<AlertDialog.Title>Stop remembering tabs?</AlertDialog.Title>
+				<AlertDialog.Description>
+					The tabs kept in this browser are deleted, and those open now go when the page is closed.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action onclick={stopKeepingTabs}>Stop remembering</AlertDialog.Action>
 			</AlertDialog.Footer>
 		</AlertDialog.Content>
 	</AlertDialog.Root>

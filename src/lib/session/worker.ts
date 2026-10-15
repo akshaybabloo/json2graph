@@ -71,6 +71,11 @@ function handle(call: SessionCall): Promise<unknown> {
 			return transact([CONTENTS], 'readwrite', (transaction) =>
 				transaction.objectStore(CONTENTS).delete(call.id)
 			);
+		case 'clear':
+			return transact([SESSIONS, CONTENTS], 'readwrite', (transaction) => {
+				transaction.objectStore(SESSIONS).clear();
+				transaction.objectStore(CONTENTS).clear();
+			});
 		case 'readContent':
 			return transact([CONTENTS], 'readonly', (transaction) =>
 				transaction.objectStore(CONTENTS).get(call.id)

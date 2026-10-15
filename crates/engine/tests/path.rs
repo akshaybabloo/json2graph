@@ -2,7 +2,7 @@ mod common;
 
 use common::{METRICS, graph};
 use json2graph_engine::layout::Graph;
-use json2graph_engine::query::{Frame, ROW_WORDS, View, query, query_path};
+use json2graph_engine::query::{Frame, KEY_INDEX, ROW_WORDS, View, query, query_path};
 
 /// Boxes, breadth first: the root, `a`, then `c` and `d` inside `a`.
 const NESTED: &str = r#"{"a": {"c": {"x": 1}, "d": {"y": 2, "z": 3}}}"#;
@@ -115,4 +115,18 @@ fn unknown_target_draws_nothing() {
     let g = graph(NESTED);
     let f = path(&g, &view(40.0, 30.0), 99);
     assert_eq!(f.boxes.len() + f.edges.len() + f.rows.len(), 0);
+}
+
+#[test]
+fn path_edges_have_the_keys_of_their_children() {
+    let src = r#"{"list": [{"deep": {"x": 1}}]}"#;
+    let g = graph(src);
+    let deepest = g.boxes.len() as u32 - 1;
+    let f = path(&g, &view(0.0, 0.0), deepest);
+    let keys: Vec<(u32, u32, u32)> = f.edge_keys.chunks(3).map(|k| (k[0], k[1], k[2])).collect();
+    // From the box up to the root: "deep", then the first element, then "list".
+    assert_eq!(keys.len(), 3);
+    assert_eq!(keys[1], (KEY_INDEX, 0, 0));
+    let name = |(_, offset, length): (u32, u32, u32)| &src[offset as usize..][..length as usize];
+    assert_eq!((name(keys[0]), name(keys[2])), ("deep", "list"));
 }

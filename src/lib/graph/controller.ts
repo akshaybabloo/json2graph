@@ -8,6 +8,7 @@ import type {
 	LoadEvent,
 	ToWorker
 } from './protocol';
+import type { Settings } from '../settings.svelte';
 import { readTheme } from './theme';
 
 /** Space kept around the graph when it is fitted to the canvas. */
@@ -258,6 +259,11 @@ export class GraphController {
 			this.#exports.set(id, resolve);
 			this.#post({ type: 'export', id, options });
 		});
+	}
+
+	/** Draws connections as `connections` says, and labels them with keys or not. */
+	configure({ connections, connectionKeys }: Pick<Settings, 'connections' | 'connectionKeys'>) {
+		this.#post({ type: 'settings', connections, connectionKeys });
 	}
 
 	/** Collapses every box into its row, leaving the root, or shows every box again. */

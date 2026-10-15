@@ -1527,3 +1527,114 @@ test.describe('with the example open', () => {
 		await expect(page.locator('.cm-line').first()).not.toHaveClass(/cm-indent-guides/);
 	});
 });
+
+test.describe('Settings', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	/** Opens the settings menu. */
+	async function openSettings(page: Page) {
+		await page.getByRole('button', { name: 'Settings' }).click();
+		await expect(page.getByRole('menu')).toBeVisible();
+	}
+
+	/** Closes the settings menu, and waits until the page takes the pointer again. */
+	async function closeSettings(page: Page) {
+		await page.keyboard.press('Escape');
+		await expect(page.getByRole('menu')).toBeHidden();
+	}
+
+	test('draws connections sharp or curved, and remembers the choice', async ({ page }) => {
+		await replaceSource(page, '{"a": {"x": 1}, "b": [1, 2], "c": {"y": {"z": 1}}}');
+		await expect(page.getByText('5 nodes')).toBeVisible();
+		const curved = await graphShot(page);
+
+		await openSettings(page);
+		await expect(page.getByRole('menuitemradio', { name: 'Curved' })).toBeChecked();
+		await page.getByRole('menuitemradio', { name: 'Sharp' }).click();
+		await expect(page.getByRole('menuitemradio', { name: 'Sharp' })).toBeChecked();
+		await closeSettings(page);
+		const sharp = await graphShot(page);
+		expect(sharp.equals(curved)).toBe(false);
+
+		await page.reload();
+		await expect(page.getByText('5 nodes')).toBeVisible();
+		await openSettings(page);
+		await expect(page.getByRole('menuitemradio', { name: 'Sharp' })).toBeChecked();
+		await closeSettings(page);
+		expect((await graphShot(page)).equals(sharp)).toBe(true);
+	});
+
+	test('writes the key of each node on the connection to it, array elements too', async ({
+		page
+	}) => {
+		await replaceSource(page, '{"address": {"city": "Pune"}, "matrix": [[1, 2], [3, 4]]}');
+		await expect(page.getByText('5 nodes')).toBeVisible();
+		const plain = await graphShot(page);
+
+		await openSettings(page);
+		const keys = page.getByRole('menuitemcheckbox', { name: 'Show keys on connections' });
+		await expect(keys).not.toBeChecked();
+		await keys.click();
+		await expect(keys).toBeChecked();
+		await closeSettings(page);
+		const keyed = await graphShot(page);
+		expect(keyed.equals(plain)).toBe(false);
+
+		// Turned off again, the graph is as it was.
+		await openSettings(page);
+		await keys.click();
+		await closeSettings(page);
+		expect((await graphShot(page)).equals(plain)).toBe(true);
+
+		// A tab that was hidden while keys were turned on has them, and room for them, when shown.
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await openSettings(page);
+		await keys.click();
+		await closeSettings(page);
+		await page.getByRole('tab').first().click();
+		await expect(page.getByText('5 nodes')).toBeVisible();
+		expect((await graphShot(page)).equals(keyed)).toBe(true);
+	});
+
+	test('stops remembering tabs, forgetting those kept, once that is confirmed', async ({
+		page
+	}) => {
+		await replaceSource(page, '{"kept": true}');
+		await expect.poll(() => savedTabs(page)).toEqual([{ name: null, size: 14 }]);
+
+		await openSettings(page);
+		await page.getByRole('menuitemcheckbox', { name: 'Remember tabs in this browser' }).click();
+		// Until the menu has faded out, the page takes no pointer events.
+		await expect(page.getByRole('menu')).toBeHidden();
+		const dialog = page.getByRole('alertdialog', { name: 'Stop remembering tabs?' });
+		await dialog.getByRole('button', { name: 'Cancel' }).click();
+		await expect(dialog).toBeHidden();
+		expect(await savedTabs(page)).toEqual([{ name: null, size: 14 }]);
+
+		await openSettings(page);
+		await page.getByRole('menuitemcheckbox', { name: 'Remember tabs in this browser' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		await dialog.getByRole('button', { name: 'Stop remembering' }).click();
+		await expect(dialog).toBeHidden();
+		await expect(page.getByText('Tabs are not kept in this browser')).toBeVisible();
+		await expect.poll(() => savedTabs(page)).toBeNull();
+
+		// Nothing comes back, and nothing is kept, over a reload.
+		await page.reload();
+		await expect(page.getByRole('status')).toBeHidden();
+		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
+		await replaceSource(page, '{"gone": true}');
+		await expect(page.getByText('1 node')).toBeVisible();
+		expect(await savedTabs(page)).toBeNull();
+
+		// Turned on again, the tabs open then are kept.
+		await openSettings(page);
+		await page.getByRole('menuitemcheckbox', { name: 'Remember tabs in this browser' }).click();
+		await expect(page.getByText('Tabs are kept in this browser')).toBeVisible();
+		await expect.poll(() => savedTabs(page)).toEqual([{ name: null, size: 14 }]);
+		await page.reload();
+		await expect(page.locator('.cm-content')).toHaveText('{"gone": true}');
+	});
+});
