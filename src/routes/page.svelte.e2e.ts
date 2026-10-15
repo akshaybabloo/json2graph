@@ -803,7 +803,8 @@ test.describe('CSV', () => {
 		await expect(page.getByRole('button', { name: 'Type of the document: CSV' })).toBeVisible();
 		const colour = (text: string) =>
 			page
-				.locator('.cm-content span', { hasText: new RegExp(`^${text}$`) })
+				.locator('.cm-content')
+				.getByText(text, { exact: true })
 				.first()
 				.evaluate((span) => getComputedStyle(span).color);
 		const [name, city, age] = [
@@ -855,9 +856,15 @@ test.describe('CSV', () => {
 		await expect(table).toBeHidden();
 		await expect(page.getByRole('button', { name: 'Hide editor' })).toBeDisabled();
 
-		// A document without a table hides the graph alone, and gives the editor the room.
-		await page.getByRole('button', { name: 'Show graph' }).click();
+		// With the editor hidden and only the table left, a tab without a table brings the graph back.
+		await page.getByRole('button', { name: 'Show table' }).click();
+		await page.getByRole('button', { name: 'Hide editor' }).click();
 		await page.getByRole('button', { name: 'New tab' }).click();
+		await expect(graph).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Hide graph' })).toBeDisabled();
+		await page.getByRole('button', { name: 'Show editor' }).click();
+
+		// A document without a table hides the graph alone, and gives the editor the room.
 		await expect(page.getByRole('button', { name: 'Hide table' })).toHaveCount(0);
 		await expect(page.getByRole('button', { name: 'Show table' })).toHaveCount(0);
 		const editorWidth = (await page.getByRole('region', { name: 'Source' }).boundingBox())!.width;

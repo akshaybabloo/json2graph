@@ -295,9 +295,13 @@
 		tableText = tab.type === 'csv' ? text : null;
 	}
 
-	const showGraph = $derived(!graphHidden);
 	/** Only a CSV has a table. */
 	const showTable = $derived(isCsv && !tableHidden);
+	/**
+	 * The graph comes back when nothing else would be shown: when a tab whose
+	 * table was all there was gives way to one without a table.
+	 */
+	const showGraph = $derived(!graphHidden || (sourceHidden && !showTable));
 	const showView = $derived(showGraph || showTable);
 
 	/**

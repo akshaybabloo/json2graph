@@ -30,8 +30,12 @@
 	/** How much the arrow keys widen or narrow a column. */
 	const KEY_STEP = 2;
 
-	/** Where the records of `text` start, once the worker has found them. */
-	let rows = $state.raw<Rows | null>(null);
+	/**
+	 * Where the records start, once the worker has found them, with the text
+	 * they were found in: until it finds them in a newer text, the table shows
+	 * the one it has them for.
+	 */
+	let rows = $state.raw<(Rows & { text: string }) | null>(null);
 	let scrollTop = $state(0);
 	let viewHeight = $state(0);
 
@@ -47,7 +51,7 @@
 		worker ??= new Worker(new URL('../csv/rows-worker.ts', import.meta.url), { type: 'module' });
 		const id = ++asked;
 		worker.onmessage = (event: MessageEvent<Rows>) => {
-			if (event.data.id === asked) rows = event.data;
+			if (event.data.id === asked) rows = { ...event.data, text: source };
 		};
 		worker.postMessage({ id, text: source } satisfies RowsRequest);
 	});
@@ -56,9 +60,9 @@
 
 	/** The fields of record `index`, the header being record 0. */
 	function record(index: number): string[] {
-		if (!rows || text === null) return [];
-		const end = index + 1 < rows.starts.length ? rows.starts[index + 1] : text.length;
-		return parseRecord(text.slice(rows.starts[index], end), rows.delimiter);
+		if (!rows) return [];
+		const end = index + 1 < rows.starts.length ? rows.starts[index + 1] : rows.text.length;
+		return parseRecord(rows.text.slice(rows.starts[index], end), rows.delimiter);
 	}
 
 	const header = $derived(rows ? columnNames(record(0)) : []);
