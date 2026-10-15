@@ -145,6 +145,11 @@
 	let allCollapsed = $state(false);
 	let progress = $state<{ label: string; fraction: number } | null>(null);
 	let error = $state<string | null>(null);
+	/**
+	 * Whether the document is being formatted. The first time, that waits for
+	 * the formatter to download, which can take a while.
+	 */
+	let formatting = $state(false);
 	let dragging = $state(false);
 
 	const number = new Intl.NumberFormat();
@@ -256,7 +261,8 @@
 	async function format() {
 		const formatter = docType.format;
 		const text = editor?.text ?? '';
-		if (!formatter || text.trim() === '') return;
+		if (!formatter || text.trim() === '' || formatting) return;
+		formatting = true;
 		try {
 			const formatted = await formatter(text);
 			// Not over what was typed in the meantime.
@@ -264,6 +270,8 @@
 		} catch (reason) {
 			// The error of the graph, if it is on screen, says where the mistake is.
 			error ??= `Cannot format: ${reason instanceof Error ? reason.message : reason}`;
+		} finally {
+			formatting = false;
 		}
 	}
 
@@ -1210,11 +1218,17 @@
 		<Tooltip.Root>
 			<Tooltip.Trigger
 				class={buttonVariants({ variant: 'ghost', size: 'xs' })}
-				disabled={empty || !docType.format || readingText !== null}
+				disabled={empty || !docType.format || readingText !== null || formatting}
+				aria-busy={formatting}
 				onclick={format}
 			>
-				<ListIndentIncreaseIcon />
-				Format
+				{#if formatting}
+					<LoaderCircleIcon class="animate-spin" aria-hidden="true" />
+					Formatting…
+				{:else}
+					<ListIndentIncreaseIcon />
+					Format
+				{/if}
 			</Tooltip.Trigger>
 			<Tooltip.Content>Format the {docType.label} (Shift+Alt+F in the editor)</Tooltip.Content>
 		</Tooltip.Root>

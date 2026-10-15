@@ -282,8 +282,19 @@ test('fetches the formatter when it is first used, and only then', async ({ page
 	await expect(page.getByText('1 node')).toBeVisible();
 	expect(fetched).toHaveLength(0);
 
+	// Until it has downloaded, the button says it is formatting, and cannot be pressed again.
+	let download!: () => void;
+	const downloaded = new Promise<void>((resolve) => (download = resolve));
+	await page.route(/formatter_bg.*\.wasm/, async (route) => {
+		await downloaded;
+		await route.continue();
+	});
 	await format.click();
+	await expect(page.getByRole('button', { name: 'Formatting…' })).toBeDisabled();
+	await expect(page.locator('.cm-line')).toHaveText(['{"a":1}']);
+	download();
 	await expect(page.locator('.cm-line')).toHaveText(['{ "a": 1 }', '']);
+	await expect(page.getByRole('button', { name: 'Format', exact: true })).toBeEnabled();
 	await replaceSource(page, '{"b":2}');
 	await format.click();
 	await expect(page.locator('.cm-line')).toHaveText(['{ "b": 2 }', '']);
