@@ -45,7 +45,7 @@ export type ToWorker =
 	| { type: 'view'; x: number; y: number; k: number }
 	/**
 	 * Indexes `data` as the document of `tab`, in place of the one it had, and
-	 * shows it. `format` is the id of the document's type: JSON or CSV.
+	 * shows it. `format` is the id of the document's type: JSON, CSV or YAML.
 	 */
 	| { type: 'load'; id: number; tab: number; data: Blob; format: string }
 	/**
@@ -66,9 +66,12 @@ export type ToWorker =
 	| { type: 'leave' }
 	| { type: 'export'; id: number; options: ExportOptions };
 
+/** The steps of a load. Only YAML is converted, to JSON, and how far that has got is not known. */
+export type LoadPhase = 'converting' | 'reading' | 'parsing' | 'layout';
+
 /** Progress and outcome of the load with the same `id`. */
 export type LoadEvent =
-	| { type: 'progress'; id: number; phase: 'reading' | 'parsing' | 'layout'; fraction: number }
+	| { type: 'progress'; id: number; phase: LoadPhase; fraction: number }
 	/** With `restored`, the graph is one a tab kept, as it was left, rather than a new one. */
 	| { type: 'ready'; id: number; stats: GraphStats; restored: boolean }
 	| { type: 'error'; id: number; message: string };

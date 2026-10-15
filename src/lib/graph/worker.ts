@@ -6,7 +6,8 @@
 import init, { Document } from '#engine';
 import { detectDelimiter } from '../csv/csv';
 import { MONO_FONT } from '../fonts';
-import type { ExportOptions, FromWorker, GraphStats, ToWorker } from './protocol';
+import type { Converted } from '../yaml/worker';
+import type { ExportOptions, FromWorker, GraphStats, LoadPhase, ToWorker } from './protocol';
 import type { Theme } from './theme';
 
 const FONT_SIZE = 12;
@@ -94,6 +95,8 @@ let theme: Theme;
 let doc: Document | null = null;
 let sourcePtr = 0;
 let currentLoad = 0;
+/** The worker turning a YAML document into JSON for the load on its way, if one is. */
+let converting: { worker: Worker; reject: (error: Error) => void } | null = null;
 
 /** A tab's indexed document, with what is said about it when it is shown again. */
 interface Kept {
@@ -153,7 +156,7 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			showTab(message.id, message.tab);
 			break;
 		case 'clear':
-			currentLoad = message.id;
+			supersede(message.id);
 			drop(message.tab);
 			show(null);
 			break;
@@ -253,15 +256,55 @@ function requestDraw() {
 	requestAnimationFrame(draw);
 }
 
+/** Makes `id` the load whose outcome is shown, and stops the work of the one before. */
+function supersede(id: number) {
+	currentLoad = id;
+	converting?.reject(new Error('Superseded'));
+}
+
+/**
+ * The JSON of YAML document `data`, which the engine can index. A worker of
+ * its own works it out, and is stopped when a newer load supersedes this one.
+ */
+function yamlAsJson(data: Blob): Promise<Blob> {
+	const worker = new Worker(new URL('../yaml/worker.ts', import.meta.url), { type: 'module' });
+	return new Promise<Blob>((resolve, reject) => {
+		const current = {
+			worker,
+			reject: (error: Error) => {
+				worker.terminate();
+				if (converting === current) converting = null;
+				reject(error);
+			}
+		};
+		converting = current;
+		worker.onmessage = ({ data: answer }: MessageEvent<Converted>) => {
+			if (answer.error === null) {
+				worker.terminate();
+				converting = null;
+				resolve(answer.json);
+			} else {
+				current.reject(new Error(answer.error));
+			}
+		};
+		worker.onerror = (event) => {
+			event.preventDefault();
+			current.reject(new Error(event.message || 'The YAML could not be read'));
+		};
+		worker.postMessage(data);
+	});
+}
+
 async function load(id: number, tab: number, data: Blob, format: string) {
 	const started = performance.now();
-	currentLoad = id;
+	const bytes = data.size;
+	supersede(id);
 	// Not two large versions of one document at once.
 	if (data.size > RETAIN_LIMIT) drop(tab);
 
 	let next: Document | null = null;
 	let lastReport = started + PROGRESS_DELAY - 50;
-	const progress = (phase: 'reading' | 'parsing' | 'layout', fraction: number) => {
+	const progress = (phase: LoadPhase, fraction: number) => {
 		const now = performance.now();
 		if (now - lastReport < 50) return;
 		lastReport = now;
@@ -271,6 +314,16 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 	try {
 		await engine;
 		if (id !== currentLoad) return;
+		if (format === 'yaml') {
+			// How long it takes is not known: it says so if it is not quick.
+			const slow = setTimeout(() => progress('converting', 0), PROGRESS_DELAY);
+			try {
+				data = await yamlAsJson(data);
+			} finally {
+				clearTimeout(slow);
+			}
+			if (id !== currentLoad) return;
+		}
 		next = new Document(data.size);
 		if (format === 'csv') {
 			// Its start is enough to tell the delimiter.
@@ -338,7 +391,7 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 	}
 
 	drop(tab);
-	const entry = { doc: next, bytes: data.size, ms: performance.now() - started };
+	const entry = { doc: next, bytes, ms: performance.now() - started };
 	kept.set(tab, entry);
 	show(next);
 	post({ type: 'ready', id, restored: false, stats: statsOf(entry) });
@@ -346,7 +399,7 @@ async function load(id: number, tab: number, data: Blob, format: string) {
 
 /** Shows the document a tab kept, or nothing when it has none. Like a load, it supersedes older loads. */
 function showTab(id: number, tab: number) {
-	currentLoad = id;
+	supersede(id);
 	const entry = kept.get(tab);
 	show(entry?.doc ?? null);
 	if (entry) post({ type: 'ready', id, restored: true, stats: statsOf(entry) });

@@ -315,6 +315,51 @@ version = "0.7.0"
 source = "git+https://github.com/biomejs/biome.git?tag=%40biomejs%2Fbiome%402.5.15#0b4c11f553a7e702f9851af139662e1de45dc131"
 
 [[package]]
+name = "biome_yaml_factory"
+version = "0.7.0"
+source = "git+https://github.com/biomejs/biome.git?tag=%40biomejs%2Fbiome%402.5.15#0b4c11f553a7e702f9851af139662e1de45dc131"
+dependencies = [
+ "biome_rowan",
+ "biome_yaml_syntax",
+]
+
+[[package]]
+name = "biome_yaml_formatter"
+version = "0.7.0"
+source = "git+https://github.com/biomejs/biome.git?tag=%40biomejs%2Fbiome%402.5.15#0b4c11f553a7e702f9851af139662e1de45dc131"
+dependencies = [
+ "biome_deserialize",
+ "biome_diagnostics",
+ "biome_formatter",
+ "biome_parser",
+ "biome_rowan",
+ "biome_suppression",
+ "biome_yaml_syntax",
+]
+
+[[package]]
+name = "biome_yaml_parser"
+version = "0.7.0"
+source = "git+https://github.com/biomejs/biome.git?tag=%40biomejs%2Fbiome%402.5.15#0b4c11f553a7e702f9851af139662e1de45dc131"
+dependencies = [
+ "biome_diagnostics",
+ "biome_parser",
+ "biome_rowan",
+ "biome_unicode_table",
+ "biome_yaml_factory",
+ "biome_yaml_syntax",
+]
+
+[[package]]
+name = "biome_yaml_syntax"
+version = "0.7.0"
+source = "git+https://github.com/biomejs/biome.git?tag=%40biomejs%2Fbiome%402.5.15#0b4c11f553a7e702f9851af139662e1de45dc131"
+dependencies = [
+ "biome_rowan",
+ "serde",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -595,6 +640,8 @@ dependencies = [
  "biome_formatter",
  "biome_json_formatter",
  "biome_json_parser",
+ "biome_yaml_formatter",
+ "biome_yaml_parser",
  "wasm-bindgen",
 ]
 

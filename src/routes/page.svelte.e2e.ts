@@ -957,6 +957,84 @@ test.describe('CSV', () => {
 	});
 });
 
+test.describe('YAML', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	test('shows YAML as a graph, and exports it named after the file', async ({ page }) => {
+		await openExample(page, 'YAML');
+		await expect(page.getByRole('tab', { name: 'service.yaml' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Type of the document: YAML' })).toBeVisible();
+		await expect(page.locator('.cm-content')).toContainText('defaults: &defaults');
+		// Merge keys copy what they merge: each environment has resources of its own.
+		await expect(page.getByText('14 nodes')).toBeVisible();
+
+		await page.getByRole('button', { name: 'Export as image' }).click();
+		expect((await exportImage(page)).suggestedFilename()).toBe('service.png');
+	});
+
+	test('colours the values in the text as the graph colours them', async ({ page }) => {
+		await replaceSource(
+			page,
+			'# A person\nname: Ada\nage: 36\nactive: true\nnext: ~\ncity: "London"\n'
+		);
+		await expect(page.getByRole('button', { name: 'Type of the document: YAML' })).toBeVisible();
+		// The innermost element with the text: a value is marked inside its highlighting.
+		const colour = (text: string) =>
+			page
+				.locator('.cm-content')
+				.getByText(text, { exact: true })
+				.last()
+				.evaluate((span) => getComputedStyle(span).color);
+		const token = (name: string) =>
+			page.evaluate((name) => {
+				const probe = document.body.appendChild(document.createElement('span'));
+				probe.style.color = `var(${name})`;
+				const colour = getComputedStyle(probe).color;
+				probe.remove();
+				return colour;
+			}, name);
+
+		expect(await colour('Ada')).toBe(await token('--json-string'));
+		expect(await colour('"London"')).toBe(await token('--json-string'));
+		expect(await colour('36')).toBe(await token('--json-number'));
+		expect(await colour('true')).toBe(await token('--json-boolean'));
+		expect(await colour('~')).toBe(await token('--muted-foreground'));
+		expect(await colour('# A person')).toBe(await token('--muted-foreground'));
+		expect(await colour('age')).toBe(await token('--foreground'));
+	});
+
+	test('takes keys and values that are typed for YAML', async ({ page }) => {
+		await replaceSource(page, '# A person\nname: Ada\nlanguages:\n  - Analytical Engine\n');
+		await expect(page.getByRole('button', { name: 'Type of the document: YAML' })).toBeVisible();
+		await expect(page.getByText('2 nodes')).toBeVisible();
+	});
+
+	test('keeps the last graph and says where the mistake is while the YAML is invalid', async ({
+		page
+	}) => {
+		await replaceSource(page, 'a:\n  b: 1\n');
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await replaceSource(page, 'a:\n  b: c: d\n');
+		await expect(page.getByRole('alert')).toContainText('at line 2, column 7');
+		await expect(page.getByText('2 nodes')).toBeVisible();
+	});
+
+	test('formats YAML, keeping its comments', async ({ page }) => {
+		await replaceSource(page, 'list:\n-   a # first\n-   {x: 1,y: [1,2]}\n');
+		await expect(page.getByText('4 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Format' }).click();
+		await expect(page.locator('.cm-line')).toHaveText([
+			'list:',
+			'  - a # first',
+			'  - { x: 1, y: [1, 2] }',
+			''
+		]);
+		await expect(page.getByText('4 nodes')).toBeVisible();
+	});
+});
+
 test.describe('with the example open', () => {
 	test.beforeEach(async ({ page }) => {
 		await openExample(page);

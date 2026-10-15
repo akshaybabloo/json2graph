@@ -73,7 +73,12 @@
 	const release = /^\d+\.\d+\.\d+$/.test(version)
 		? `${REPOSITORY}/releases/tag/${version}`
 		: undefined;
-	const LABELS = { reading: 'Reading', parsing: 'Indexing', layout: 'Laying out' };
+	const LABELS = {
+		converting: 'Converting',
+		reading: 'Reading',
+		parsing: 'Indexing',
+		layout: 'Laying out'
+	};
 	/** The choice of a document's type that leaves it to be detected. */
 	const AUTO = 'auto';
 	/** What an image of a document that was typed rather than opened is called. */
@@ -719,13 +724,14 @@
 		if (file) open(file);
 	}
 
-	/** Saves the graph as a PNG named after the document. */
+	/** Saves the graph as a PNG named after the document, less the extension of its type. */
 	async function exportImage(options: ExportOptions) {
 		const blob = await controller?.exportImage(options);
 		if (!blob) return;
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
-		link.download = `${name?.replace(/\.json$/i, '') ?? UNTITLED}.png`;
+		const base = name && typeOfName(name) ? name.replace(/\.[^./]+$/, '') : name;
+		link.download = `${base ?? UNTITLED}.png`;
 		link.click();
 		URL.revokeObjectURL(link.href);
 	}
