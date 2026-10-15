@@ -9,6 +9,9 @@ export interface TabRecord {
 	name: string | null;
 	/** Whether its content is a file too large for the editor, rather than the text in it. */
 	file: boolean;
+	/** Id of the type of its document, and whether it was chosen rather than detected. */
+	type: string;
+	typeChosen: boolean;
 	/** Size of its content when it was last saved, so that content gone missing can be told from none. */
 	size: number;
 	view: View | null;
@@ -30,8 +33,18 @@ export type SessionCall =
 	/** The content kept for tab `id`, which is read from disk only when it is used. */
 	| { method: 'readContent'; id: number };
 
+/**
+ * A session as it is read back, which may have been saved by an older
+ * version of the page: before there were types, its tabs had none.
+ */
+export interface StoredSession {
+	tabs: (Omit<TabRecord, 'type' | 'typeChosen'> &
+		Partial<Pick<TabRecord, 'type' | 'typeChosen'>>)[];
+	active: number;
+}
+
 export type SessionResult = {
-	load: { session: Session | null; contents: [number, Blob][] };
+	load: { session: StoredSession | null; contents: [number, Blob][] };
 	saveSession: void;
 	saveContent: void;
 	deleteContent: void;

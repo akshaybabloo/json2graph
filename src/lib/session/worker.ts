@@ -4,7 +4,7 @@
  * blobs that are read from disk only when they are used.
  */
 
-import type { FromSessionWorker, Session, SessionCall, ToSessionWorker } from './protocol';
+import type { FromSessionWorker, SessionCall, StoredSession, ToSessionWorker } from './protocol';
 
 const DATABASE = 'json2graph';
 /** The saved session, under the key `SESSION`. */
@@ -39,11 +39,11 @@ async function transact<T>(
 }
 
 async function load() {
-	let session: Session | null = null;
+	let session: StoredSession | null = null;
 	const contents: [number, Blob][] = [];
 	await transact([SESSIONS, CONTENTS], 'readonly', (transaction) => {
 		const read = transaction.objectStore(SESSIONS).get(SESSION);
-		read.onsuccess = () => (session = (read.result as Session | undefined) ?? null);
+		read.onsuccess = () => (session = (read.result as StoredSession | undefined) ?? null);
 		const cursor = transaction.objectStore(CONTENTS).openCursor();
 		cursor.onsuccess = () => {
 			const at = cursor.result;

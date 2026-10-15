@@ -8,6 +8,14 @@ async function replaceSource(page: Page, text: string) {
 	await page.keyboard.insertText(text);
 }
 
+/** Opens the JSON example from the Example menu. */
+async function openExample(page: Page) {
+	await page.getByRole('button', { name: 'Example' }).click();
+	await page.getByRole('menuitem', { name: 'JSON' }).click();
+	// Until the menu has faded out, the page takes no pointer events.
+	await expect(page.getByRole('menu')).toBeHidden();
+}
+
 /** Exports with the choices made in the export menu, which must be open. */
 async function exportImage(page: Page) {
 	const download = page.waitForEvent('download');
@@ -47,7 +55,7 @@ async function graphShot(page: Page): Promise<Buffer> {
 }
 
 /** What the editor shows while it is empty. */
-const PLACEHOLDER = 'Type or paste JSON here';
+const PLACEHOLDER = 'Type or paste here';
 
 test.beforeEach(async ({ page }) => {
 	await page.goto('/');
@@ -68,7 +76,7 @@ test('starts with no document and says how to open one', async ({ page }) => {
 	await page.getByRole('button', { name: 'Hide editor' }).click();
 	await expect(page.getByText('Open a file, or drop one anywhere on the page.')).toBeVisible();
 	await page.getByRole('button', { name: 'Show editor' }).click();
-	await expect(page.getByText(/Type or paste JSON on the left/)).toBeVisible();
+	await expect(page.getByText(/Type or paste on the left/)).toBeVisible();
 });
 
 test('shows the version it was built as, and links it to the release', async ({ page }) => {
@@ -311,7 +319,7 @@ test.describe('before the script of the page has run', () => {
 	test.use({ javaScriptEnabled: false });
 
 	test('is laid out as it will be, and says that it is loading', async ({ page }) => {
-		const editor = (await page.getByRole('region', { name: 'JSON source' }).boundingBox())!;
+		const editor = (await page.getByRole('region', { name: 'Source' }).boundingBox())!;
 		const graph = (await page.getByRole('region', { name: 'Graph', exact: true }).boundingBox())!;
 		expect(graph.width / editor.width).toBeCloseTo(72 / 28, 1);
 		await expect(page.getByRole('status')).toHaveText('Loading the graph engine…');
@@ -327,14 +335,14 @@ async function openFile(page: Page, name: string, text: string) {
 	});
 }
 
-/**
- * The tabs as saved in the browser's storage: their names, and the size of
- * the content saved for each. Null until something is saved.
- */
-async function savedTabs(page: Page) {
+/** A tab as it is saved in the browser's storage. */
+type SavedTab = { name: string | null; size: number; type: string; typeChosen: boolean };
+
+/** The tabs as saved in the browser's storage. Null until something is saved. */
+async function savedRecords(page: Page) {
 	return page.evaluate(
 		() =>
-			new Promise<{ name: string | null; size: number }[] | null>((resolve, reject) => {
+			new Promise<SavedTab[] | null>((resolve, reject) => {
 				const open = indexedDB.open('json2graph');
 				// Not created here: the page's worker creates it.
 				open.onupgradeneeded = () => open.transaction?.abort();
@@ -344,14 +352,18 @@ async function savedTabs(page: Page) {
 					const read = database.transaction('session').objectStore('session').get('tabs');
 					read.onsuccess = () => {
 						database.close();
-						const session = read.result as
-							{ tabs: { name: string | null; size: number }[] } | undefined;
-						resolve(session ? session.tabs.map(({ name, size }) => ({ name, size })) : null);
+						const session = read.result as { tabs: SavedTab[] } | undefined;
+						resolve(session?.tabs ?? null);
 					};
 					read.onerror = () => reject(read.error);
 				};
 			})
 	);
+}
+
+/** The names of the saved tabs, and the size of the content saved for each. */
+async function savedTabs(page: Page) {
+	return (await savedRecords(page))?.map(({ name, size }) => ({ name, size })) ?? null;
 }
 
 /** The types of the contents saved in the browser's storage. */
@@ -491,6 +503,27 @@ test.describe('tabs', () => {
 		await field.fill('kept.json');
 		await page.locator('canvas').click();
 		await expect(page.getByRole('tab')).toHaveText(['kept.json']);
+	});
+
+	test('shows the type of the document in the footer, detected or chosen', async ({ page }) => {
+		const type = page.getByRole('button', { name: 'Type of the document: JSON' });
+		await expect(type).toBeVisible();
+		await type.click();
+		await expect(page.getByRole('menuitemradio', { name: 'Detect automatically' })).toBeChecked();
+		await page.getByRole('menuitemradio', { name: 'JSON' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+
+		// Chosen, the type is kept with the tab.
+		const chosen = async () => {
+			const record = (await savedRecords(page))?.[0];
+			return record && [record.type, record.typeChosen];
+		};
+		await expect.poll(chosen).toEqual(['json', true]);
+		await page.reload();
+		await page.getByRole('button', { name: 'Type of the document: JSON' }).click();
+		await expect(page.getByRole('menuitemradio', { name: 'JSON' })).toBeChecked();
+		await page.getByRole('menuitemradio', { name: 'Detect automatically' }).click();
+		await expect.poll(chosen).toEqual(['json', false]);
 	});
 
 	test('keeps the tabs over a reload, with what was typed in them', async ({ page }) => {
@@ -701,9 +734,41 @@ test.describe('tabs', () => {
 	});
 });
 
+test('opens an example into an empty tab, and asks where to when the tab is in use', async ({
+	page
+}) => {
+	await openExample(page);
+	await expect(page.getByRole('tab')).toHaveText(['sample.json']);
+	await expect(page.getByRole('alertdialog')).toBeHidden();
+
+	await replaceSource(page, '{"mine": 1}');
+	await expect(page.getByText('1 node')).toBeVisible();
+	const dialog = page.getByRole('alertdialog');
+
+	// Cancelled, nothing changes.
+	await openExample(page);
+	await expect(dialog).toContainText('sample.json already has a document in it');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(page.locator('.cm-content')).toHaveText('{"mine": 1}');
+
+	await openExample(page);
+	await dialog.getByRole('button', { name: 'Open in a new tab' }).click();
+	await expect(page.getByRole('tab')).toHaveText(['sample.json', 'sample.json']);
+	await expect(page.getByText('16 nodes')).toBeVisible();
+
+	await page.getByRole('tab').first().click();
+	await expect(page.locator('.cm-content')).toHaveText('{"mine": 1}');
+	await openExample(page);
+	await dialog.getByRole('button', { name: 'Replace this tab' }).click();
+	await expect(page.getByRole('tab')).toHaveCount(2);
+	await expect(page.locator('.cm-content')).toContainText('"name": "json2graph"');
+	await expect(page.getByText('16 nodes')).toBeVisible();
+});
+
 test.describe('with the example open', () => {
 	test.beforeEach(async ({ page }) => {
-		await page.getByRole('button', { name: 'Example' }).click();
+		await openExample(page);
 		// The sample has 16 non-empty objects and arrays.
 		await expect(page.getByText('16 nodes')).toBeVisible();
 	});
@@ -802,7 +867,7 @@ test.describe('with the example open', () => {
 	test('hides the editor so the graph takes the whole width, and shows it again', async ({
 		page
 	}) => {
-		const source = page.getByRole('region', { name: 'JSON source' });
+		const source = page.getByRole('region', { name: 'Source' });
 		const canvas = page.locator('canvas');
 		const width = (await canvas.boundingBox())!.width;
 
@@ -831,7 +896,7 @@ test.describe('with the example open', () => {
 			mimeType: 'application/json',
 			buffer: Buffer.from('{"a": }')
 		});
-		await expect(page.getByRole('region', { name: 'JSON source' })).toBeVisible();
+		await expect(page.getByRole('region', { name: 'Source' })).toBeVisible();
 		await expect(page.getByRole('alert')).toContainText('line 1');
 	});
 
@@ -958,7 +1023,7 @@ test.describe('with the example open', () => {
 		await page.getByRole('button', { name: 'Clear' }).click();
 		await expect(page.getByText(PLACEHOLDER)).toBeVisible();
 
-		await page.getByRole('button', { name: 'Example' }).click();
+		await openExample(page);
 		await expect(page.getByRole('tab', { name: 'sample.json' })).toBeVisible();
 		await expect(page.getByText('16 nodes')).toBeVisible();
 		await expect(page.locator('.cm-content')).toContainText('"name": "json2graph"');
