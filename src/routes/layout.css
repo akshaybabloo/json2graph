@@ -159,6 +159,12 @@
 
 /* Colours of JSON values, shared by the editor and the graph canvas. */
 :root {
+	/*
+	 * Scrollbars and other browser-drawn controls follow the mode. Without
+	 * this, light mode would fall back to the system's choice, which the
+	 * color-scheme meta tag in src/app.html leaves them to.
+	 */
+	color-scheme: light;
 	--json-string: #15803d;
 	--json-number: #b45309;
 	--json-boolean: #7c3aed;
@@ -166,7 +172,6 @@
 }
 
 .dark {
-	/* Scrollbars and other browser-drawn controls follow the mode. */
 	color-scheme: dark;
 	--json-string: #86efac;
 	--json-number: #fcd34d;
