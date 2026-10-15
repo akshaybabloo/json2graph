@@ -1046,6 +1046,188 @@ test.describe('YAML', () => {
 	});
 });
 
+test.describe('Mermaid', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	const diagram = (page: Page) => page.locator('[data-diagram] svg');
+
+	test('draws a diagram where the graph would be, and exports it named after the file', async ({
+		page
+	}) => {
+		await openExample(page, 'Mermaid');
+		await expect(page.getByRole('tab', { name: 'flow.mmd' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Type of the document: Mermaid' })).toBeVisible();
+		await expect(diagram(page)).toContainText('What type is it?');
+		await expect(page.getByText(/· flowchart ·/)).toBeVisible();
+		await expect(
+			page.getByRole('application', { name: 'Diagram of flow.mmd: flowchart' })
+		).toBeVisible();
+		// Nothing to format, and no nodes to collapse.
+		await expect(page.getByRole('button', { name: 'Format' })).toBeDisabled();
+		await expect(page.getByRole('button', { name: 'Collapse all nodes' })).toHaveCount(0);
+
+		await page.getByRole('button', { name: 'Export as image' }).click();
+		const download = await exportImage(page);
+		expect(download.suggestedFilename()).toBe('flow.png');
+		const path = await download.path();
+		expect((await readFile(path)).subarray(1, 4).toString()).toBe('PNG');
+	});
+
+	test('colours the text as the Mermaid Live Editor does', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  %% A note\n  start[Begin] -->|go| finish');
+		await expect(page.getByRole('button', { name: 'Type of the document: Mermaid' })).toBeVisible();
+		const style = (text: string) =>
+			page
+				.locator('.cm-content')
+				.getByText(text, { exact: true })
+				.last()
+				.evaluate((span) => {
+					const { color, fontWeight } = getComputedStyle(span);
+					return { color, bold: Number(fontWeight) >= 600 };
+				});
+		const token = (name: string) =>
+			page.evaluate((name) => {
+				const probe = document.body.appendChild(document.createElement('span'));
+				probe.style.color = `var(${name})`;
+				const colour = getComputedStyle(probe).color;
+				probe.remove();
+				return colour;
+			}, name);
+
+		expect(await style('flowchart')).toEqual({ color: await token('--json-boolean'), bold: true });
+		expect(await style('LR')).toEqual({ color: await token('--json-boolean'), bold: false });
+		expect(await style('start')).toEqual({ color: await token('--json-container'), bold: false });
+		expect((await style('[Begin]')).color).toBe(await token('--json-string'));
+		expect((await style('|go|')).color).toBe(await token('--json-string'));
+		expect(await style('-->')).toEqual({ color: await token('--brand'), bold: true });
+		expect((await style('%% A note')).color).toBe(await token('--muted-foreground'));
+	});
+
+	test('draws the labels of edges over the line, not under it', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A -->|label| B');
+		await expect(diagram(page)).toContainText('label');
+		const [label, background] = await diagram(page)
+			.locator('.edgeLabel')
+			.filter({ hasText: 'label' })
+			.last()
+			.evaluate((element) => {
+				const probe = document.body.appendChild(document.createElement('span'));
+				probe.style.backgroundColor = 'var(--background)';
+				const background = getComputedStyle(probe).backgroundColor;
+				probe.remove();
+				return [getComputedStyle(element).backgroundColor, background];
+			});
+		expect(label).toBe(background);
+	});
+
+	test('shows the whole of a diagram drawn while it was hidden, once it is shown', async ({
+		page
+	}) => {
+		await page.getByRole('button', { name: 'Hide graph' }).click();
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		await expect(page.getByRole('button', { name: 'Type of the document: Mermaid' })).toBeVisible();
+		await expect(diagram(page)).toContainText('B');
+
+		await page.getByRole('button', { name: 'Show diagram' }).click();
+		const scale = () =>
+			page
+				.locator('[data-diagram]')
+				.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+		await expect.poll(scale).toBeGreaterThan(0.5);
+		await expect(diagram(page)).toBeInViewport();
+	});
+
+	test('draws the grid of the graph behind the diagram', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		await expect(diagram(page)).toContainText('B');
+		const lines = page
+			.getByRole('application', { name: /^Diagram/ })
+			.locator('canvas')
+			.evaluate((canvas: HTMLCanvasElement) => {
+				const { data } = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
+				return data.some((value, index) => index % 4 === 3 && value > 0);
+			});
+		expect(await lines).toBe(true);
+	});
+
+	test('zooms the diagram from the toolbar and the keys', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		await expect(diagram(page)).toContainText('B');
+		const scale = () =>
+			page
+				.locator('[data-diagram]')
+				.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+		const fitted = await scale();
+		await page.getByRole('button', { name: 'Zoom in' }).click();
+		expect(await scale()).toBeGreaterThan(fitted);
+		await page.getByRole('application', { name: /^Diagram/ }).focus();
+		await page.keyboard.press('0');
+		expect(await scale()).toBeCloseTo(fitted);
+	});
+
+	test('keeps the last diagram and says where the mistake is while the text is invalid', async ({
+		page
+	}) => {
+		await replaceSource(page, 'sequenceDiagram\n  Alice->>Bob: Hello');
+		await expect(page.getByRole('button', { name: 'Type of the document: Mermaid' })).toBeVisible();
+		await expect(diagram(page)).toContainText('Alice');
+		await page.keyboard.insertText('\n  Bob->>');
+		await expect(page.getByRole('alert')).toContainText('Parse error on line 3');
+		await expect(diagram(page)).toContainText('Alice');
+
+		await page.keyboard.insertText('Alice: Hi');
+		await expect(page.getByRole('alert')).toBeHidden();
+		await expect(diagram(page)).toContainText('Hi');
+	});
+
+	test('draws the diagram again in the other theme', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		const fill = () =>
+			diagram(page)
+				.locator('.node rect')
+				.first()
+				.evaluate((rect) => getComputedStyle(rect).fill);
+		await expect(diagram(page)).toContainText('B');
+		const light = await fill();
+		await page.getByRole('button', { name: 'Switch between light and dark mode' }).click();
+		await expect.poll(fill).not.toBe(light);
+	});
+
+	test('draws nodes flat, without gradients or shadows, in either theme', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		const look = () =>
+			diagram(page)
+				.locator('.node rect')
+				.first()
+				.evaluate((rect) => {
+					const style = getComputedStyle(rect);
+					return { stroke: style.stroke.startsWith('url('), filter: style.filter };
+				});
+		await expect(diagram(page)).toContainText('B');
+		for (const theme of ['light', 'dark']) {
+			// Drawn again after the switch.
+			await expect.poll(look, { message: theme }).toEqual({ stroke: false, filter: 'none' });
+			await page.getByRole('button', { name: 'Switch between light and dark mode' }).click();
+		}
+	});
+
+	test('shows the graph again for a tab that is not a diagram', async ({ page }) => {
+		await replaceSource(page, 'flowchart LR\n  A --> B');
+		await expect(diagram(page)).toBeVisible();
+		await page.getByRole('button', { name: 'New tab' }).click();
+		await replaceSource(page, '{"a": {"b": 1}}');
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await expect(diagram(page)).toHaveCount(0);
+		await expect(page.getByRole('application', { name: /^Graph/ })).toBeVisible();
+
+		// Back on the first tab, its diagram is drawn again.
+		await page.getByRole('tab', { name: 'Untitled' }).first().click();
+		await expect(diagram(page)).toContainText('B');
+	});
+});
+
 test.describe('with the example open', () => {
 	test.beforeEach(async ({ page }) => {
 		await openExample(page);

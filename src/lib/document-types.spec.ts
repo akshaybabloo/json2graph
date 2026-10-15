@@ -33,6 +33,14 @@ describe('detect', () => {
 		expect(detect(null, 'url,name\nhttp://example.com,home\n').id).toBe('csv');
 	});
 
+	it('takes a diagram for Mermaid', () => {
+		expect(detect('flow.mmd', '').id).toBe('mermaid');
+		expect(detect('flow.mermaid', '').id).toBe('mermaid');
+		expect(detect(null, 'flowchart LR\n  A --> B\n').id).toBe('mermaid');
+		expect(detect(null, '---\ntitle: Flow\n---\ngraph TD\n  A --> B\n').id).toBe('mermaid');
+		expect(detect(null, 'graph: TD\nnodes: 2\n').id).toBe('yaml');
+	});
+
 	it('falls back on the default type', () => {
 		expect(detect(null, '')).toBe(DEFAULT_TYPE);
 		expect(documentType('no such type')).toBe(DEFAULT_TYPE);

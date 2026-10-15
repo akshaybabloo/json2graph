@@ -54,6 +54,7 @@
 		"eslint-plugin-svelte": "^3.19.0",
 		"globals": "^17.6.0",
 		"js-yaml": "^5.4.3",
+		"mermaid": "^12.2.0",
 		"paneforge": "^1.0.2",
 		"playwright": "^1.60.0",
 		"prettier": "^3.8.3",
