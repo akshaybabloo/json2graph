@@ -10,14 +10,19 @@
 
 	let {
 		disabled = false,
+		open = $bindable(false),
 		onexport
-	}: { disabled?: boolean; onexport: (options: ExportOptions) => void } = $props();
+	}: {
+		disabled?: boolean;
+		/** Whether the choices are open, which the page can also ask for. */
+		open?: boolean;
+		onexport: (options: ExportOptions) => void;
+	} = $props();
 
 	const LABEL = 'Export as image';
 	const id = $props.id();
 
 	// The choices outlast the popover, so the next export starts from the last one.
-	let open = $state(false);
 	let background = $state<'theme' | 'transparent' | 'custom'>('theme');
 	let color = $state('#ffffff');
 	let grid = $state(true);

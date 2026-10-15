@@ -40,7 +40,7 @@ pub struct Value {
 }
 
 impl Value {
-    fn new(kind: Kind, key: (u32, u32), a: u32, b: u32) -> Self {
+    pub(crate) fn new(kind: Kind, key: (u32, u32), a: u32, b: u32) -> Self {
         Value {
             key_off: key.0,
             meta: kind as u32 | key.1 << 8,

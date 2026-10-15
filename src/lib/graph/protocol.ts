@@ -43,8 +43,11 @@ export type ToWorker =
 	| { type: 'theme'; theme: Theme }
 	/** Screen = world * k + (x, y). */
 	| { type: 'view'; x: number; y: number; k: number }
-	/** Indexes `data` as the document of `tab`, in place of the one it had, and shows it. */
-	| { type: 'load'; id: number; tab: number; data: Blob }
+	/**
+	 * Indexes `data` as the document of `tab`, in place of the one it had, and
+	 * shows it. `format` is the id of the document's type: JSON or CSV.
+	 */
+	| { type: 'load'; id: number; tab: number; data: Blob; format: string }
 	/**
 	 * Shows the document `tab` kept, or nothing if it has none. Like a load, it
 	 * supersedes any load with an older `id`.

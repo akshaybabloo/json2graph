@@ -15,6 +15,13 @@ describe('detect', () => {
 		expect(detect('untitled', '[1, 2]').id).toBe('json');
 	});
 
+	it('takes a table for CSV', () => {
+		expect(detect('people.csv', '{').id).toBe('csv');
+		expect(detect(null, 'name,age\nAda,36\n').id).toBe('csv');
+		expect(detect(null, '[\n1,2,\n3,4\n]').id).toBe('json');
+		expect(detect(null, 'just a line, of words').id).toBe('json');
+	});
+
 	it('falls back on the default type', () => {
 		expect(detect(null, '')).toBe(DEFAULT_TYPE);
 		expect(documentType('no such type')).toBe(DEFAULT_TYPE);
