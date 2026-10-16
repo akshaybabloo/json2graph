@@ -968,6 +968,140 @@ test.describe('CSV', () => {
 	});
 });
 
+test.describe('Plot', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+		await openExample(page, 'CSV');
+		await expect(page.getByText('9 nodes')).toBeVisible();
+	});
+
+	const plot = (page: Page) => page.getByRole('region', { name: 'Plot' });
+	const column = (page: Page, name: string) =>
+		page.getByRole('table', { name: 'Rows' }).getByRole('button', { name, exact: true });
+
+	/** The names of the traces in the legend of the plot, once it is drawn. */
+	async function legend(page: Page) {
+		await expect(plot(page).locator('.main-svg').first()).toBeVisible();
+		await expect(plot(page).getByRole('status')).toHaveCount(0);
+		return plot(page).locator('.legendtext').allTextContents();
+	}
+
+	test('plots the columns chosen in the table, from its right-click menu', async ({ page }) => {
+		await expect(plot(page)).toBeHidden();
+		await column(page, 'born').click();
+		await column(page, 'languages').click({ modifiers: ['ControlOrMeta'] });
+		await expect(column(page, 'born')).toHaveAttribute('aria-pressed', 'true');
+		await column(page, 'languages').click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Plot 2 columns' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+
+		await expect(plot(page)).toBeVisible();
+		expect(await legend(page)).toEqual(['born', 'languages']);
+		// The ids, which only go up, name the rows.
+		await expect(plot(page).getByRole('button', { name: /Across\s*id/ })).toBeVisible();
+
+		// Text is not plotted.
+		await column(page, 'name').click({ button: 'right' });
+		await expect(page.getByRole('menuitem', { name: 'Plot' })).toBeDisabled();
+		await expect(page.getByText('name holds text, so it is not plotted.')).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(page.getByRole('menu')).toBeHidden();
+
+		await plot(page).getByRole('button', { name: 'Close the plot' }).click();
+		await expect(plot(page)).toBeHidden();
+	});
+
+	test('plots true as 1 and false as 0', async ({ page }) => {
+		await column(page, 'active').click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Plot active' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		expect(await legend(page)).toEqual([]);
+		await expect
+			.poll(async () => (await plot(page).locator('.ytick text').allTextContents()).sort())
+			.toEqual(['false', 'true']);
+	});
+
+	test('draws lines, points or bars', async ({ page }) => {
+		await column(page, 'born').click({ button: 'right' });
+		await page.getByRole('menuitem', { name: 'Plot born' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		await legend(page);
+		await expect(plot(page).locator('.scatterlayer .js-line')).toHaveCount(1);
+
+		await plot(page).getByRole('button', { name: 'Chart: Line' }).click();
+		await page.getByRole('menuitemradio', { name: 'Bars' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		await expect(plot(page).locator('.barlayer .point')).toHaveCount(8);
+	});
+
+	test('sits beside the graph above the table, and takes the place of the graph hidden', async ({
+		page
+	}) => {
+		await page.getByRole('button', { name: 'Plot the table' }).click();
+		await legend(page);
+		const graph = page.getByRole('region', { name: 'Graph' });
+		const table = page.getByRole('region', { name: 'Table' });
+		const [graphBox, plotBox, tableBox] = await Promise.all(
+			[graph, plot(page), table].map(async (region) => (await region.boundingBox())!)
+		);
+		expect(plotBox.x).toBeGreaterThanOrEqual(graphBox.x + graphBox.width);
+		expect(tableBox.y).toBeGreaterThanOrEqual(plotBox.y + plotBox.height);
+		expect(tableBox.width).toBeGreaterThan(graphBox.width + plotBox.width - 20);
+
+		const width = async () => (await plot(page).boundingBox())!.width;
+		await page.getByRole('button', { name: 'Hide graph' }).click();
+		await expect(graph).toBeHidden();
+		await expect.poll(width).toBeGreaterThan(plotBox.width + 100);
+
+		await page.getByRole('button', { name: 'Hide plot' }).click();
+		await expect(plot(page)).toBeHidden();
+		await expect(table).toBeVisible();
+		await page.getByRole('button', { name: 'Show graph' }).click();
+		await expect(graph).toBeVisible();
+		await expect(plot(page)).toBeHidden();
+		await page.getByRole('button', { name: 'Show plot' }).click();
+		await expect(plot(page)).toBeVisible();
+		await expect(graph).toBeVisible();
+	});
+
+	test('keeps plotting the columns that are left when others are taken out of the text', async ({
+		page
+	}) => {
+		const errors: Error[] = [];
+		page.on('pageerror', (error) => errors.push(error));
+		await page.getByRole('button', { name: 'Plot the table' }).click();
+		expect(await legend(page)).toEqual(['born', 'languages', 'active']);
+
+		await replaceSource(page, 'id,name,city,born\n1,Ada,London,1815\n2,Grace,New York,1906\n');
+		await expect.poll(() => plot(page).locator('.legendtext').allTextContents()).toEqual([]);
+		await expect(plot(page).locator('.scatterlayer .trace')).toHaveCount(1);
+
+		await replaceSource(page, 'id,name\n1,Ada\n2,Grace\n');
+		await expect(
+			plot(page).getByText('No column of numbers is chosen.', { exact: false })
+		).toBeVisible();
+		expect(errors).toEqual([]);
+	});
+
+	test("opens from the graph's toolbar, and is kept with the tab", async ({ page }) => {
+		const button = page.getByRole('button', { name: 'Plot the table' });
+		await button.click();
+		await expect(button).toHaveAttribute('aria-pressed', 'true');
+		// None chosen: the first columns that can be plotted, against the ids.
+		expect(await legend(page)).toEqual(['born', 'languages', 'active']);
+
+		await button.click();
+		await expect(button).toHaveAttribute('aria-pressed', 'false');
+		await expect(plot(page)).toBeHidden();
+		await button.click();
+		await expect(plot(page)).toBeVisible();
+
+		await page.reload();
+		await expect(page.getByText('9 nodes')).toBeVisible();
+		expect(await legend(page)).toEqual(['born', 'languages', 'active']);
+	});
+});
+
 test.describe('YAML', () => {
 	test.beforeEach(async ({ page }) => {
 		await expect(page.getByRole('status')).toBeHidden();

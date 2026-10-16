@@ -1,4 +1,5 @@
 import type { EditorState } from '@codemirror/state';
+import type { PlotChoice } from './csv/plot';
 import { DEFAULT_TYPE } from './document-types';
 import type { View } from './graph/controller';
 
@@ -28,6 +29,8 @@ export type Tab = {
 	view: View | null;
 	/** Whether every node was last collapsed, rather than shown. */
 	allCollapsed: boolean;
+	/** What is plotted of its table, beside the graph; none when nothing is. */
+	plot: PlotChoice | null;
 	/** What was wrong with its text when another tab was shown. */
 	error: string | null;
 	/**
@@ -56,6 +59,7 @@ export function newTab(id: number): Tab {
 		typeChosen: false,
 		view: null,
 		allCollapsed: false,
+		plot: null,
 		error: null,
 		indexed: false,
 		discarded: false,

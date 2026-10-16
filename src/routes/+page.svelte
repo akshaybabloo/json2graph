@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 	import ChevronsDownUpIcon from '@lucide/svelte/icons/chevrons-down-up';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
@@ -23,6 +24,7 @@
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import { version } from '$app/env';
+	import CsvPlot from '#lib/components/csv-plot.svelte';
 	import CsvTable from '#lib/components/csv-table.svelte';
 	import DiagramView, { type Diagram } from '#lib/components/diagram-view.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
@@ -36,6 +38,7 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
+	import { keptPlot } from '#lib/csv/plot.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
 	import {
 		ACCEPT,
@@ -94,14 +97,20 @@
 
 	let controller: GraphController | undefined;
 	let diagramView = $state<DiagramView>();
+	let csvTable = $state<CsvTable>();
 	let editor: JsonEditor | undefined;
 	let sourcePane: Pane | undefined;
-	/** The pane of the graph and the table, to the right of the editor. */
+	/** The pane of the graph, the plot and the table, to the right of the editor. */
 	let viewPane: Pane | undefined;
+	/** The pane of the graph and the plot beside it, above the table. */
+	let upperPane: Pane | undefined;
 	let graphPane: Pane | undefined;
+	let plotPane: Pane | undefined;
 	let tablePane: Pane | undefined;
-	/** How tall the table last was beside the graph, as a share of their pane. */
+	/** How tall the table last was below the graph, as a share of their pane. */
 	let tableSize = 40;
+	/** How wide the plot last was beside the graph, as a share of their pane. */
+	let plotSize = 50;
 	/** Keeps the tabs over a reload; none in a window that leaves that to another. */
 	let saver: TabSaver | null = null;
 	/** Settles once the saved tabs are back, which comes before opening anything. */
@@ -153,6 +162,8 @@
 	let graphHidden = $state(false);
 	/** Whether the table of a CSV is hidden. */
 	let tableHidden = $state(false);
+	/** Whether the plot of a table is hidden, while there is one. */
+	let plotHidden = $state(false);
 	/** Whether the engine that draws the graph has loaded, and why not if it failed to. */
 	let engineReady = $state(false);
 	let engineError = $state<string | null>(null);
@@ -362,14 +373,19 @@
 		diagramText = tab.type === 'mermaid' ? text : null;
 	}
 
-	/** Only a CSV has a table. */
+	/** Only a CSV has a table, and a plot once columns of it are plotted. */
 	const showTable = $derived(isCsv && !tableHidden);
+	const showPlot = $derived(isCsv && tab.plot !== null && !plotHidden);
 	/**
 	 * The graph comes back when nothing else would be shown: when a tab whose
-	 * table was all there was gives way to one without a table.
+	 * table or plot was all there was gives way to one without them.
 	 */
-	const showGraph = $derived(!graphHidden || (sourceHidden && !showTable));
-	const showView = $derived(showGraph || showTable);
+	const showGraph = $derived(!graphHidden || (sourceHidden && !showTable && !showPlot));
+	const showView = $derived(showGraph || showTable || showPlot);
+	/** What a document is named after when it is saved as an image, less the extension of its type. */
+	const imageName = $derived(
+		(name && typeOfName(name) ? name.replace(/\.[^./]+$/, '') : name) ?? UNTITLED
+	);
 
 	/**
 	 * Lays the panes out for what is shown. Untracked: the panes read their
@@ -377,13 +393,17 @@
 	 * is dragged to another size.
 	 */
 	$effect(() => {
-		const [graph, table, view] = [showGraph, showTable, showView];
+		const [graph, plot, table, view] = [showGraph, showPlot, showTable, showView];
 		untrack(() => {
 			if (view) viewPane?.expand();
 			else viewPane?.collapse();
-			if (graph && table) tablePane?.resize(tableSize);
-			else if (graph) tablePane?.collapse();
-			else if (table) graphPane?.collapse();
+			const upper = graph || plot;
+			if (upper && table) tablePane?.resize(tableSize);
+			else if (upper) tablePane?.collapse();
+			else if (table) upperPane?.collapse();
+			if (graph && plot) plotPane?.resize(plotSize);
+			else if (graph) plotPane?.collapse();
+			else if (plot) graphPane?.collapse();
 		});
 	});
 
@@ -533,7 +553,8 @@
 					type: t.type,
 					typeChosen: t.typeChosen,
 					size: saver?.sizeOf(t.id) ?? 0,
-					view: view && { x: view.x, y: view.y, k: view.k }
+					view: view && { x: view.x, y: view.y, k: view.k },
+					plot: $state.snapshot(t.plot)
 				};
 			})
 		};
@@ -543,7 +564,7 @@
 	const sessionShape = $derived(
 		JSON.stringify([
 			activeId,
-			tabs.map((t) => [t.id, t.name, t.file !== null, t.lost, t.type, t.typeChosen])
+			tabs.map((t) => [t.id, t.name, t.file !== null, t.lost, t.type, t.typeChosen, t.plot])
 		])
 	);
 	$effect(() => {
@@ -656,6 +677,7 @@
 				type: documentType(record.type ?? DEFAULT_TYPE.id).id,
 				typeChosen: record.typeChosen ?? false,
 				view: record.view,
+				plot: keptPlot(record.plot),
 				file: record.file ? content : null,
 				saved: record.file ? null : content,
 				lost: content === null && record.size > 0
@@ -847,8 +869,7 @@
 		if (!blob) return;
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
-		const base = name && typeOfName(name) ? name.replace(/\.[^./]+$/, '') : name;
-		link.download = `${base ?? UNTITLED}.png`;
+		link.download = `${imageName}.png`;
 		link.click();
 		URL.revokeObjectURL(link.href);
 	}
@@ -875,6 +896,19 @@
 	function toggleAll() {
 		allCollapsed = !allCollapsed;
 		controller?.collapseAll(allCollapsed);
+	}
+
+	/**
+	 * Shows the plot of the table beside the graph, or hides it. A table not
+	 * yet plotted is plotted by the columns chosen in it, or else by its first.
+	 */
+	function togglePlot() {
+		if (showPlot) {
+			plotHidden = true;
+			return;
+		}
+		tab.plot ??= csvTable?.plotChoice() ?? { chart: 'line', x: null, y: [] };
+		plotHidden = false;
 	}
 </script>
 
@@ -1151,6 +1185,7 @@
 					onCollapse={() => {
 						graphHidden = true;
 						if (isCsv) tableHidden = true;
+						if (showPlot) plotHidden = true;
 					}}
 					onExpand={() => {
 						// Dragged open: the graph comes back.
@@ -1158,191 +1193,272 @@
 					}}
 				>
 					<Resizable.PaneGroup direction="vertical">
+						<!-- The graph, and the plot of a table beside it. -->
 						<Resizable.Pane
-							bind:this={graphPane}
+							bind:this={upperPane}
 							defaultSize={100}
 							minSize={20}
 							collapsible
 							collapsedSize={0}
-							onCollapse={() => (graphHidden = true)}
-							onExpand={() => (graphHidden = false)}
+							onCollapse={() => {
+								graphHidden = true;
+								if (showPlot) plotHidden = true;
+							}}
+							onExpand={() => {
+								// Opened for the graph, or dragged open: the graph is shown. Opened for the plot alone, it stays hidden.
+								if (showGraph || !showPlot) graphHidden = false;
+							}}
 						>
-							<section
-								id="graph-view"
-								class="relative h-full"
-								aria-label={isDiagram ? 'Diagram' : 'Graph'}
-							>
-								<!-- Its right-click menu does what the toolbar does; without a graph, it is the browser's. -->
-								<ContextMenu.Root>
-									<ContextMenu.Trigger class="absolute inset-0" disabled={!hasView}>
-										<!--
+							<Resizable.PaneGroup direction="horizontal">
+								<Resizable.Pane
+									bind:this={graphPane}
+									defaultSize={100}
+									minSize={20}
+									collapsible
+									collapsedSize={0}
+									onCollapse={() => (graphHidden = true)}
+									onExpand={() => (graphHidden = false)}
+								>
+									<section
+										id="graph-view"
+										class="relative h-full"
+										aria-label={isDiagram ? 'Diagram' : 'Graph'}
+									>
+										<!-- Its right-click menu does what the toolbar does; without a graph, it is the browser's. -->
+										<ContextMenu.Root>
+											<ContextMenu.Trigger class="absolute inset-0" disabled={!hasView}>
+												<!--
 							The canvas takes the keys that move the view (see GraphController),
 							which no standard widget does: that is what the application role is for.
 						-->
-										<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
-										<canvas
-											{@attach graph}
-											id="graph"
-											class={[
-												'absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2',
-												// Kept, at its size, under a diagram: other tabs have graphs.
-												isDiagram && 'invisible'
-											]}
-											role="application"
-											tabindex="0"
-											aria-label={graphLabel}
-											aria-describedby="graph-help"
-										></canvas>
-										{#if isDiagram}
-											<!-- A view of its own for each tab, which starts with the whole diagram. -->
-											{#key activeId}
-												<DiagramView
-													bind:this={diagramView}
-													text={diagramText}
-													label={diagramLabel}
-													describedby="graph-help"
-													ondrawing={() => (drawing = true)}
-													ondrawn={(drawn) => {
-														drawing = false;
-														diagram = drawn;
-														error = null;
-													}}
-													onfailed={(message) => {
-														drawing = false;
-														error = message;
-														// The error is shown under the editor.
-														sourcePane?.expand();
-													}}
-												/>
-											{/key}
-										{/if}
-									</ContextMenu.Trigger>
-									<ContextMenu.Content class="min-w-52">
-										{#each tools as tool (tool.label)}
-											<ContextMenu.Item onSelect={tool.run}>
-												<tool.icon />
-												{tool.label}
-												<ContextMenu.Shortcut>{tool.key}</ContextMenu.Shortcut>
-											</ContextMenu.Item>
-										{/each}
-										{#if !isDiagram}
-											<ContextMenu.Item onSelect={toggleAll}>
-												{#if allCollapsed}
-													<ChevronsUpDownIcon />
-													Expand all nodes
-												{:else}
-													<ChevronsDownUpIcon />
-													Collapse all nodes
+												<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+												<canvas
+													{@attach graph}
+													id="graph"
+													class={[
+														'absolute inset-0 h-full w-full touch-none outline-ring focus-visible:outline-2 focus-visible:-outline-offset-2',
+														// Kept, at its size, under a diagram: other tabs have graphs.
+														isDiagram && 'invisible'
+													]}
+													role="application"
+													tabindex="0"
+													aria-label={graphLabel}
+													aria-describedby="graph-help"
+												></canvas>
+												{#if isDiagram}
+													<!-- A view of its own for each tab, which starts with the whole diagram. -->
+													{#key activeId}
+														<DiagramView
+															bind:this={diagramView}
+															text={diagramText}
+															label={diagramLabel}
+															describedby="graph-help"
+															ondrawing={() => (drawing = true)}
+															ondrawn={(drawn) => {
+																drawing = false;
+																diagram = drawn;
+																error = null;
+															}}
+															onfailed={(message) => {
+																drawing = false;
+																error = message;
+																// The error is shown under the editor.
+																sourcePane?.expand();
+															}}
+														/>
+													{/key}
 												{/if}
-											</ContextMenu.Item>
+											</ContextMenu.Trigger>
+											<ContextMenu.Content class="min-w-52">
+												{#each tools as tool (tool.label)}
+													<ContextMenu.Item onSelect={tool.run}>
+														<tool.icon />
+														{tool.label}
+														<ContextMenu.Shortcut>{tool.key}</ContextMenu.Shortcut>
+													</ContextMenu.Item>
+												{/each}
+												{#if !isDiagram}
+													<ContextMenu.Item onSelect={toggleAll}>
+														{#if allCollapsed}
+															<ChevronsUpDownIcon />
+															Expand all nodes
+														{:else}
+															<ChevronsDownUpIcon />
+															Collapse all nodes
+														{/if}
+													</ContextMenu.Item>
+												{/if}
+												{#if isCsv}
+													<ContextMenu.Item onSelect={togglePlot}>
+														<ChartLineIcon />
+														{showPlot ? 'Hide the plot' : 'Plot the table'}
+													</ContextMenu.Item>
+												{/if}
+												<ContextMenu.Separator />
+												<ContextMenu.Item onSelect={() => (exportOpen = true)}>
+													<ImageDownIcon />
+													Export as image…
+												</ContextMenu.Item>
+											</ContextMenu.Content>
+										</ContextMenu.Root>
+
+										<div
+											class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
+											role="toolbar"
+											aria-label={isDiagram ? 'Diagram view' : 'Graph view'}
+											aria-orientation="vertical"
+										>
+											{#each tools as tool (tool.label)}
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													disabled={!hasView}
+													aria-label={tool.label}
+													title={tool.label}
+													onclick={tool.run}
+												>
+													<tool.icon />
+												</Button>
+											{/each}
+											{#if !isDiagram}
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													disabled={!stats}
+													aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+													title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
+													onclick={toggleAll}
+												>
+													{#if allCollapsed}
+														<ChevronsUpDownIcon />
+													{:else}
+														<ChevronsDownUpIcon />
+													{/if}
+												</Button>
+											{/if}
+											{#if isCsv}
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													aria-label="Plot the table"
+													aria-pressed={showPlot}
+													aria-controls="plot"
+													title={showPlot ? 'Hide the plot' : 'Plot the table'}
+													onclick={togglePlot}
+												>
+													<ChartLineIcon />
+												</Button>
+											{/if}
+											<ExportMenu
+												disabled={!hasView}
+												bind:open={exportOpen}
+												onexport={exportImage}
+											/>
+										</div>
+
+										{#if progress && !isDiagram}
+											<div
+												class="absolute inset-x-0 top-0 h-1 bg-muted"
+												role="progressbar"
+												aria-label={progress.label}
+												aria-valuemin={0}
+												aria-valuemax={100}
+												aria-valuenow={Math.round(progress.fraction * 100)}
+											>
+												<div
+													class="h-full bg-primary"
+													style:width="{progress.fraction * 100}%"
+												></div>
+											</div>
 										{/if}
-										<ContextMenu.Separator />
-										<ContextMenu.Item onSelect={() => (exportOpen = true)}>
-											<ImageDownIcon />
-											Export as image…
-										</ContextMenu.Item>
-									</ContextMenu.Content>
-								</ContextMenu.Root>
 
-								<div
-									class="absolute top-3 right-3 flex flex-col gap-1 rounded-lg border bg-background/90 p-1 shadow-xs"
-									role="toolbar"
-									aria-label={isDiagram ? 'Diagram view' : 'Graph view'}
-									aria-orientation="vertical"
-								>
-									{#each tools as tool (tool.label)}
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											disabled={!hasView}
-											aria-label={tool.label}
-											title={tool.label}
-											onclick={tool.run}
+										{#if isDiagram}
+											<!-- The diagram view says what it is doing. -->
+										{:else if engineError !== null}
+											<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
+												<p class="max-w-sm text-destructive" role="alert">
+													The graph engine could not be loaded, so no graph can be drawn: {engineError}.
+													Reload the page to try again.
+												</p>
+											</div>
+										{:else if !engineReady}
+											<p
+												class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
+												role="status"
+											>
+												<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
+												Loading the graph engine…
+											</p>
+										{/if}
+										{#if !hasView && !drawing && (isDiagram || (engineReady && !progress)) && !error && tooLarge === null && !readingText && !tab.lost}
+											<div
+												class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
+											>
+												<p class="max-w-xs text-muted-foreground">
+													{#if sourceHidden}
+														Open a file, or drop one anywhere on the page.
+													{:else}
+														Type or paste on the left, open a file, or drop one anywhere on the
+														page.
+													{/if}
+													<span class="font-medium text-foreground">Example</span> loads a sample document.
+												</p>
+											</div>
+										{/if}
+
+										<p
+											id="graph-help"
+											class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
 										>
-											<tool.icon />
-										</Button>
-									{/each}
-									{#if !isDiagram}
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											disabled={!stats}
-											aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-											title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
-											onclick={toggleAll}
-										>
-											{#if allCollapsed}
-												<ChevronsUpDownIcon />
+											{#if isDiagram}
+												Drag to pan · scroll to zoom
 											{:else}
-												<ChevronsDownUpIcon />
+												Drag to pan · scroll to zoom · click + or − on the edge of a node to show or
+												hide the next one · click a shortened value to expand it
 											{/if}
-										</Button>
-									{/if}
-									<ExportMenu disabled={!hasView} bind:open={exportOpen} onexport={exportImage} />
-								</div>
-
-								{#if progress && !isDiagram}
-									<div
-										class="absolute inset-x-0 top-0 h-1 bg-muted"
-										role="progressbar"
-										aria-label={progress.label}
-										aria-valuemin={0}
-										aria-valuemax={100}
-										aria-valuenow={Math.round(progress.fraction * 100)}
-									>
-										<div class="h-full bg-primary" style:width="{progress.fraction * 100}%"></div>
-									</div>
-								{/if}
-
-								{#if isDiagram}
-									<!-- The diagram view says what it is doing. -->
-								{:else if engineError !== null}
-									<div class="absolute inset-0 grid place-items-center p-6 text-center text-sm">
-										<p class="max-w-sm text-destructive" role="alert">
-											The graph engine could not be loaded, so no graph can be drawn: {engineError}.
-											Reload the page to try again.
+											<span class="sr-only">
+												With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits
+												the
+												{viewName}.
+											</span>
 										</p>
-									</div>
-								{:else if !engineReady}
-									<p
-										class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground"
-										role="status"
-									>
-										<LoaderCircleIcon class="size-4 animate-spin" aria-hidden="true" />
-										Loading the graph engine…
-									</p>
-								{/if}
-								{#if !hasView && !drawing && (isDiagram || (engineReady && !progress)) && !error && tooLarge === null && !readingText && !tab.lost}
-									<div
-										class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm"
-									>
-										<p class="max-w-xs text-muted-foreground">
-											{#if sourceHidden}
-												Open a file, or drop one anywhere on the page.
-											{:else}
-												Type or paste on the left, open a file, or drop one anywhere on the page.
-											{/if}
-											<span class="font-medium text-foreground">Example</span> loads a sample document.
-										</p>
-									</div>
-								{/if}
-
-								<p
-									id="graph-help"
-									class="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground"
+									</section>
+								</Resizable.Pane>
+								<Resizable.Handle
+									withHandle
+									class={isCsv && tab.plot ? undefined : 'hidden'}
+									aria-label="Resize the graph and the plot"
+								/>
+								<!-- Beside the graph once columns of a table are plotted, and put away otherwise. -->
+								<Resizable.Pane
+									bind:this={plotPane}
+									defaultSize={0}
+									minSize={15}
+									collapsible
+									collapsedSize={0}
+									onResize={(size) => {
+										// Its size beside the graph, to come back to.
+										if (size > 0 && size < 100) plotSize = size;
+									}}
+									onCollapse={() => {
+										if (showPlot) plotHidden = true;
+									}}
+									onExpand={() => {
+										if (isCsv && tab.plot) plotHidden = false;
+									}}
 								>
-									{#if isDiagram}
-										Drag to pan · scroll to zoom
-									{:else}
-										Drag to pan · scroll to zoom · click + or − on the edge of a node to show or
-										hide the next one · click a shortened value to expand it
-									{/if}
-									<span class="sr-only">
-										With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits the
-										{viewName}.
-									</span>
-								</p>
-							</section>
+									<section id="plot" class="h-full" aria-label="Plot">
+										{#if isCsv && tab.plot}
+											<CsvPlot
+												text={tableText}
+												bind:choice={tab.plot}
+												name={imageName}
+												onclose={() => (tab.plot = null)}
+											/>
+										{/if}
+									</section>
+								</Resizable.Pane>
+							</Resizable.PaneGroup>
 						</Resizable.Pane>
 						<Resizable.Handle
 							withHandle
@@ -1369,7 +1485,14 @@
 						>
 							<section id="table" class="h-full" aria-label="Table">
 								{#if isCsv}
-									<CsvTable text={tableText} />
+									<CsvTable
+										bind:this={csvTable}
+										text={tableText}
+										onplot={(choice) => {
+											tab.plot = choice;
+											plotHidden = false;
+										}}
+									/>
 								{/if}
 							</section>
 						</Resizable.Pane>
@@ -1474,6 +1597,17 @@
 			isCsv ? PanelTopCloseIcon : PanelRightCloseIcon,
 			isCsv ? PanelTopOpenIcon : PanelRightOpenIcon
 		)}
+		{#if isCsv && tab.plot}
+			{@render paneToggle(
+				'plot',
+				showPlot,
+				'plot',
+				showPlot && !showGraph && !showTable && sourceHidden,
+				() => (plotHidden = !plotHidden),
+				PanelRightCloseIcon,
+				PanelRightOpenIcon
+			)}
+		{/if}
 		{#if isCsv}
 			{@render paneToggle(
 				'table',
