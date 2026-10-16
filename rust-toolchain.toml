@@ -1,5 +1,5 @@
 # The engine builds Biome's formatter, which needs a recent compiler: the one
 # that the pinned release of Biome is built with.
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 targets = ["wasm32-unknown-unknown"]
