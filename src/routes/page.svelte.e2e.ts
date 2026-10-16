@@ -1007,8 +1007,11 @@ test.describe('Plot', () => {
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('menu')).toBeHidden();
 
-		await plot(page).getByRole('button', { name: 'Close the plot' }).click();
+		await plot(page).getByRole('button', { name: 'Hide the plot' }).click();
 		await expect(plot(page)).toBeHidden();
+		// Hidden, it is kept: shown again, it plots the same columns.
+		await page.getByRole('button', { name: 'Show plot' }).click();
+		expect(await legend(page)).toEqual(['born', 'languages']);
 	});
 
 	test('plots true as 1 and false as 0', async ({ page }) => {
@@ -1048,14 +1051,27 @@ test.describe('Plot', () => {
 		expect(tableBox.y).toBeGreaterThanOrEqual(plotBox.y + plotBox.height);
 		expect(tableBox.width).toBeGreaterThan(graphBox.width + plotBox.width - 20);
 
+		const handle = (name: string) => page.getByRole('separator', { name: `Resize the ${name}` });
+		await expect(handle('editor and the graph')).toBeVisible();
+		await expect(handle('graph and the plot')).toBeVisible();
+		await expect(handle('graph and the table')).toBeVisible();
+
 		const width = async () => (await plot(page).boundingBox())!.width;
 		await page.getByRole('button', { name: 'Hide graph' }).click();
 		await expect(graph).toBeHidden();
 		await expect.poll(width).toBeGreaterThan(plotBox.width + 100);
+		// A handle goes with a pane beside it.
+		await expect(handle('graph and the plot')).toBeHidden();
+		await expect(handle('graph and the table')).toBeVisible();
 
 		await page.getByRole('button', { name: 'Hide plot' }).click();
 		await expect(plot(page)).toBeHidden();
 		await expect(table).toBeVisible();
+		await expect(handle('graph and the table')).toBeHidden();
+		await page.getByRole('button', { name: 'Hide editor' }).click();
+		await expect(handle('editor and the graph')).toBeHidden();
+		await page.getByRole('button', { name: 'Show editor' }).click();
+		await expect(handle('editor and the graph')).toBeVisible();
 		await page.getByRole('button', { name: 'Show graph' }).click();
 		await expect(graph).toBeVisible();
 		await expect(plot(page)).toBeHidden();
@@ -1081,6 +1097,32 @@ test.describe('Plot', () => {
 			plot(page).getByText('No column of numbers is chosen.', { exact: false })
 		).toBeVisible();
 		expect(errors).toEqual([]);
+	});
+
+	test('is shown alone, and then with what was shown before', async ({ page }) => {
+		// From the footer, before anything is plotted.
+		await page.getByRole('button', { name: 'Show plot' }).click();
+		await legend(page);
+		const graph = page.getByRole('region', { name: 'Graph' });
+		const table = page.getByRole('region', { name: 'Table' });
+		const source = page.getByRole('region', { name: 'Source' });
+		const alone = plot(page).getByRole('button', { name: 'Show only the plot' });
+
+		await alone.click();
+		await expect(alone).toHaveAttribute('aria-pressed', 'true');
+		await expect(graph).toBeHidden();
+		await expect(table).toBeHidden();
+		await expect(source).toBeHidden();
+		// Whatever shows last stays.
+		await expect(page.getByRole('button', { name: 'Hide plot' })).toBeDisabled();
+		const width = (await plot(page).boundingBox())!.width;
+		expect(width).toBeGreaterThan(page.viewportSize()!.width - 20);
+
+		await alone.click();
+		await expect(alone).toHaveAttribute('aria-pressed', 'false');
+		await expect(graph).toBeVisible();
+		await expect(table).toBeVisible();
+		await expect(source).toBeVisible();
 	});
 
 	test("opens from the graph's toolbar, and is kept with the tab", async ({ page }) => {
