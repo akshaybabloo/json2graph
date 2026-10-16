@@ -1064,6 +1064,25 @@ test.describe('Plot', () => {
 		await expect(graph).toBeVisible();
 	});
 
+	test('keeps plotting the columns that are left when others are taken out of the text', async ({
+		page
+	}) => {
+		const errors: Error[] = [];
+		page.on('pageerror', (error) => errors.push(error));
+		await page.getByRole('button', { name: 'Plot the table' }).click();
+		expect(await legend(page)).toEqual(['born', 'languages', 'active']);
+
+		await replaceSource(page, 'id,name,city,born\n1,Ada,London,1815\n2,Grace,New York,1906\n');
+		await expect.poll(() => plot(page).locator('.legendtext').allTextContents()).toEqual([]);
+		await expect(plot(page).locator('.scatterlayer .trace')).toHaveCount(1);
+
+		await replaceSource(page, 'id,name\n1,Ada\n2,Grace\n');
+		await expect(
+			plot(page).getByText('No column of numbers is chosen.', { exact: false })
+		).toBeVisible();
+		expect(errors).toEqual([]);
+	});
+
 	test("opens from the graph's toolbar, and is kept with the tab", async ({ page }) => {
 		const button = page.getByRole('button', { name: 'Plot the table' });
 		await button.click();

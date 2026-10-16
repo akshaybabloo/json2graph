@@ -60,22 +60,35 @@ export function firstPlot(kinds: Kind[]): PlotChoice {
 	return { chart: 'line', x, y };
 }
 
-/** The name of what is across: the column, or the row. */
-export function acrossName(columns: Column[], choice: PlotChoice): string {
-	return choice.x === null ? 'Row' : columns[choice.x].name;
+/**
+ * The column chosen across, when the table still has it: one taken out of
+ * the text since, or gone from a plot kept with a tab, leaves the number of
+ * the row.
+ */
+function acrossColumn(columns: Column[], choice: PlotChoice): Column | null {
+	return choice.x === null ? null : (columns[choice.x] ?? null);
 }
 
-/** The traces of the columns chosen up, each against the one chosen across. */
+/** The name of what is across: the column, or the row. */
+export function acrossName(columns: Column[], choice: PlotChoice): string {
+	return acrossColumn(columns, choice)?.name ?? 'Row';
+}
+
+/**
+ * The traces of the columns chosen up that the table still has as numbers,
+ * each against the one chosen across.
+ */
 export function traces({ step, columns }: Columns, choice: PlotChoice): Data[] {
-	const across = choice.x === null ? null : columns[choice.x];
+	const across = acrossColumn(columns, choice);
 	const count = columns[0]?.numbers?.length ?? columns[0]?.texts?.length ?? 0;
 	// The numbers of the rows, as the table has them.
 	const x = across
 		? (across.numbers ?? across.texts!)
 		: Float64Array.from({ length: count }, (_, i) => i * step + 1);
 	return choice.y.flatMap((place): Data[] => {
-		const { name, numbers } = columns[place];
-		if (!numbers) return [];
+		const column = columns[place];
+		if (!column?.numbers) return [];
+		const { name, numbers } = column;
 		if (choice.chart === 'bar') return [{ type: 'bar', name, x, y: numbers }];
 		return [
 			{ type: 'scatter', mode: choice.chart === 'line' ? 'lines' : 'markers', name, x, y: numbers }
