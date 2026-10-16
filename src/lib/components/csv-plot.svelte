@@ -4,6 +4,8 @@
 	import ChartScatterIcon from '@lucide/svelte/icons/chart-scatter';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
+	import Minimize2Icon from '@lucide/svelte/icons/minimize-2';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -21,11 +23,15 @@
 		choice: PlotChoice;
 		/** What an image of the plot is named after. */
 		name: string;
-		/** The plot is closed. */
-		onclose: () => void;
+		/** Whether the plot is all that is shown. */
+		alone: boolean;
+		/** The plot is to be all that is shown, or no longer. */
+		onalone: () => void;
+		/** The plot is to be hidden. */
+		onhide: () => void;
 	};
 
-	let { text, choice = $bindable(), name, onclose }: Props = $props();
+	let { text, choice = $bindable(), name, alone, onalone, onhide }: Props = $props();
 
 	const CHARTS = [
 		{ value: 'line', label: 'Line', Icon: ChartLineIcon },
@@ -277,12 +283,27 @@
 		<Tooltip.Root>
 			<Tooltip.Trigger
 				class={buttonVariants({ variant: 'ghost', size: 'icon-xs', class: 'ml-auto' })}
-				aria-label="Close the plot"
-				onclick={onclose}
+				aria-label="Show only the plot"
+				aria-pressed={alone}
+				onclick={onalone}
+			>
+				{#if alone}
+					<Minimize2Icon />
+				{:else}
+					<Maximize2Icon />
+				{/if}
+			</Tooltip.Trigger>
+			<Tooltip.Content>{alone ? 'Show the rest again' : 'Show only the plot'}</Tooltip.Content>
+		</Tooltip.Root>
+		<Tooltip.Root>
+			<Tooltip.Trigger
+				class={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
+				aria-label="Hide the plot"
+				onclick={onhide}
 			>
 				<XIcon />
 			</Tooltip.Trigger>
-			<Tooltip.Content>Close the plot</Tooltip.Content>
+			<Tooltip.Content>Hide the plot</Tooltip.Content>
 		</Tooltip.Root>
 	</div>
 	<div class="relative min-h-0 flex-1">

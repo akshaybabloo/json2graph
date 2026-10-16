@@ -30,6 +30,7 @@
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import Logo from '#lib/components/logo.svelte';
+	import PaneHandle from '#lib/components/pane-handle.svelte';
 	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -910,6 +911,27 @@
 		tab.plot ??= csvTable?.plotChoice() ?? { chart: 'line', x: null, y: [] };
 		plotHidden = false;
 	}
+
+	/** Whether the plot is all that is shown. */
+	const plotAlone = $derived(showPlot && !showGraph && !showTable && sourceHidden);
+	/** What was shown before the plot was shown alone, to show again. */
+	let besidePlot: { source: boolean; graph: boolean; table: boolean } | null = null;
+
+	/** Shows the plot alone, or what was shown with it before. */
+	function togglePlotAlone() {
+		if (plotAlone) {
+			const shown = besidePlot ?? { source: true, graph: true, table: true };
+			besidePlot = null;
+			graphHidden = !shown.graph;
+			tableHidden = !shown.table;
+			if (shown.source) sourcePane?.expand();
+			return;
+		}
+		besidePlot = { source: !sourceHidden, graph: showGraph, table: showTable };
+		graphHidden = true;
+		tableHidden = true;
+		sourcePane?.collapse();
+	}
 </script>
 
 {#snippet paneToggle(
@@ -1173,7 +1195,10 @@
 					</section>
 				</Resizable.Pane>
 
-				<Resizable.Handle withHandle aria-label="Resize the editor and the graph" />
+				<PaneHandle
+					class={!sourceHidden && showView ? undefined : 'hidden'}
+					aria-label="Resize the editor and the graph"
+				/>
 
 				<!-- Sized like the other pane: before the page's script runs, a pane has only this to go by. -->
 				<Resizable.Pane
@@ -1424,9 +1449,8 @@
 										</p>
 									</section>
 								</Resizable.Pane>
-								<Resizable.Handle
-									withHandle
-									class={isCsv && tab.plot ? undefined : 'hidden'}
+								<PaneHandle
+									class={showGraph && showPlot ? undefined : 'hidden'}
 									aria-label="Resize the graph and the plot"
 								/>
 								<!-- Beside the graph once columns of a table are plotted, and put away otherwise. -->
@@ -1453,16 +1477,17 @@
 												text={tableText}
 												bind:choice={tab.plot}
 												name={imageName}
-												onclose={() => (tab.plot = null)}
+												alone={plotAlone}
+												onalone={togglePlotAlone}
+												onhide={() => (plotHidden = true)}
 											/>
 										{/if}
 									</section>
 								</Resizable.Pane>
 							</Resizable.PaneGroup>
 						</Resizable.Pane>
-						<Resizable.Handle
-							withHandle
-							class={isCsv ? undefined : 'hidden'}
+						<PaneHandle
+							class={(showGraph || showPlot) && showTable ? undefined : 'hidden'}
 							aria-label="Resize the graph and the table"
 						/>
 						<!-- Below the graph of a CSV, and put away for other documents. -->
@@ -1597,13 +1622,13 @@
 			isCsv ? PanelTopCloseIcon : PanelRightCloseIcon,
 			isCsv ? PanelTopOpenIcon : PanelRightOpenIcon
 		)}
-		{#if isCsv && tab.plot}
+		{#if isCsv}
 			{@render paneToggle(
 				'plot',
 				showPlot,
 				'plot',
-				showPlot && !showGraph && !showTable && sourceHidden,
-				() => (plotHidden = !plotHidden),
+				plotAlone,
+				togglePlot,
 				PanelRightCloseIcon,
 				PanelRightOpenIcon
 			)}
