@@ -1,5 +1,6 @@
 /** Messages between the page and the worker that keeps the tabs in IndexedDB. */
 
+import type { PlotChoice } from '../csv/plot';
 import type { View } from '../graph/controller';
 
 /** What is kept of a tab besides its content. */
@@ -15,6 +16,8 @@ export interface TabRecord {
 	/** Size of its content when it was last saved, so that content gone missing can be told from none. */
 	size: number;
 	view: View | null;
+	/** What is plotted of its table; none for a session saved before there were plots. */
+	plot?: PlotChoice | null;
 }
 
 /** The tabs in their order, and which one was on screen. */
