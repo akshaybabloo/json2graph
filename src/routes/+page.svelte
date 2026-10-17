@@ -41,6 +41,7 @@
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { keptPlot } from '#lib/csv/plot.js';
 	import { JsonEditor } from '#lib/editor/json-editor.js';
+	import { ByteOffsets } from '#lib/editor/offsets.js';
 	import {
 		ACCEPT,
 		contentBlob,
@@ -54,7 +55,13 @@
 		type DocumentType
 	} from '#lib/document-types.js';
 	import { GraphController, ZOOM_STEP, type View } from '#lib/graph/controller.js';
-	import type { EngineEvent, ExportOptions, GraphStats, LoadEvent } from '#lib/graph/protocol.js';
+	import type {
+		EngineEvent,
+		ExportOptions,
+		GraphStats,
+		LinkEvent,
+		LoadEvent
+	} from '#lib/graph/protocol.js';
 	import type { Session, StoredSession } from '#lib/session/protocol.js';
 	import { TabSaver } from '#lib/session/saver.js';
 	import { SessionStore } from '#lib/session/store.js';
@@ -100,6 +107,13 @@
 	let diagramView = $state<DiagramView>();
 	let csvTable = $state<CsvTable>();
 	let editor: JsonEditor | undefined;
+	/**
+	 * Whether the graph on screen was indexed from the text in the editor as
+	 * it is, so that places in one lead to places in the other.
+	 */
+	let sourceLinked = false;
+	/** Turns places in that text between the editor's offsets and the graph's, once needed. */
+	let offsets: ByteOffsets | null = null;
 	let sourcePane: Pane | undefined;
 	/** The pane of the graph, the plot and the table, to the right of the editor. */
 	let viewPane: Pane | undefined;
@@ -237,7 +251,8 @@
 		controller.configure(
 			untrack(() => ({
 				connections: settings.connections,
-				connectionKeys: settings.connectionKeys
+				connectionKeys: settings.connectionKeys,
+				linkCode: settings.linkCode
 			}))
 		);
 		return () => {
@@ -250,7 +265,8 @@
 		editor = new JsonEditor(parent, {
 			onEdit,
 			onFormat: format,
-			onEmpty: (value) => (empty = value)
+			onEmpty: (value) => (empty = value),
+			onCursor: locateCursor
 		});
 		// Untracked: the attachment would otherwise make a new, empty editor
 		// each time the type of the document changed.
@@ -261,10 +277,14 @@
 		};
 	}
 
-	function onEvent(event: LoadEvent | EngineEvent) {
+	function onEvent(event: LoadEvent | EngineEvent | LinkEvent) {
 		if (event.type === 'engine') {
 			engineReady = event.error === null;
 			engineError = event.error;
+			return;
+		}
+		if (event.type === 'link') {
+			showInCode(event);
 			return;
 		}
 		if (event.type === 'progress') {
@@ -281,17 +301,68 @@
 			}
 			tab.indexed = true;
 			tab.bytes = event.stats.bytes;
+			// From the text in the editor, unless it is still to be read back or is a file too large for it.
+			sourceLinked = tab.file === null && !readingText;
+			offsets = null;
+			if (editor) locateCursor(editor.cursor, false);
 		} else {
 			// The last graph stays, kept for the tab, while the text is invalid.
 			tab.indexed = stats !== null;
+			unlink();
 			error = event.message;
 			// The error is shown under the editor.
 			sourcePane?.expand();
 		}
 	}
 
+	/**
+	 * Whether places in the code and the graph lead to each other: they are
+	 * linked in Settings, the graph is of the text in the editor as it is, and
+	 * its places are places in that text. A YAML document is indexed as the
+	 * JSON it reads as, whose places are not those of the YAML.
+	 */
+	function linkable(): boolean {
+		return (
+			settings.linkCode &&
+			sourceLinked &&
+			!editor?.pending &&
+			(tab.type === 'json' || tab.type === 'csv')
+		);
+	}
+
+	/** The graph is no longer of the text in the editor: nothing is marked in it. */
+	function unlink() {
+		sourceLinked = false;
+		offsets = null;
+		controller?.locate(null);
+	}
+
+	/** Marks the row of the graph that the cursor of the code is in; with `reveal`, it is brought on screen. */
+	function locateCursor(offset: number, reveal = true) {
+		if (!editor) return;
+		if (!linkable()) {
+			// Typed ahead of the graph: what is marked may no longer be there.
+			if (editor.pending) controller?.locate(null);
+			return;
+		}
+		offsets ??= new ByteOffsets(editor.text);
+		controller?.locate(offsets.toByte(offset), reveal);
+	}
+
+	/** Selects in the code what was clicked in the graph, or nothing for a click away from it. */
+	function showInCode({ range }: LinkEvent) {
+		if (!editor || !linkable()) return;
+		if (!range) {
+			editor.deselect();
+			return;
+		}
+		offsets ??= new ByteOffsets(editor.text);
+		editor.select(offsets.toChar(range.start), offsets.toChar(range.end));
+	}
+
 	/** An edit redraws the graph in place; while the text is invalid the last graph stays. */
 	function onEdit(text: string) {
+		unlink();
 		if (!tab.typeChosen) setType(detect(tab.name, text), false);
 		refreshText(text);
 		const content = contentBlob(text, docType);
@@ -414,6 +485,7 @@
 		error = null;
 		progress = null;
 		tab.indexed = false;
+		unlink();
 		controller?.clear(tab.id);
 	}
 
@@ -462,6 +534,9 @@
 		const showing = ++shown;
 		const current = tab;
 		current.discarded = false;
+		// Until its graph is ready.
+		sourceLinked = false;
+		offsets = null;
 		stats = null;
 		diagram = null;
 		drawing = false;
@@ -484,6 +559,8 @@
 					editor?.restore(text, language);
 					empty = editor?.empty ?? true;
 					refreshText(text);
+					// A graph the tab kept, already on screen, is of this text.
+					sourceLinked = current.indexed && stats !== null && current.file === null;
 					reindex();
 				},
 				() => {
@@ -577,8 +654,14 @@
 	$effect(() => loadSettings());
 
 	$effect(() => {
-		const chosen = { connections: settings.connections, connectionKeys: settings.connectionKeys };
+		const chosen = {
+			connections: settings.connections,
+			connectionKeys: settings.connectionKeys,
+			linkCode: settings.linkCode
+		};
 		controller?.configure(chosen);
+		// Linked again: the row of the cursor is marked, where the graph is.
+		if (chosen.linkCode) untrack(() => editor && locateCursor(editor.cursor, false));
 	});
 
 	/** Whether the saved tabs were brought back, or had nothing to bring back, which happens once. */
@@ -1070,6 +1153,20 @@
 				>
 					Show keys on connections
 				</DropdownMenu.CheckboxItem>
+				<DropdownMenu.Separator />
+				<DropdownMenu.CheckboxItem
+					checked={settings.linkCode}
+					onCheckedChange={(checked) => changeSettings({ linkCode: checked })}
+				>
+					Link the graph and the code
+				</DropdownMenu.CheckboxItem>
+				{#if tab.type === 'yaml' || isDiagram}
+					<p class="px-2 pb-1.5 text-xs text-muted-foreground">
+						{isDiagram
+							? 'A Mermaid diagram has no graph to link.'
+							: 'YAML is drawn from the JSON it reads as, so it is not linked.'}
+					</p>
+				{/if}
 				<DropdownMenu.Separator />
 				<DropdownMenu.CheckboxItem
 					checked={settings.keepTabs}

@@ -1704,6 +1704,159 @@ test.describe('with the example open', () => {
 	});
 });
 
+test('marks no other copies of the text selected in the editor', async ({ page }) => {
+	await replaceSource(page, '{"a": "a", "b": ["a", "a"]}');
+	await page.keyboard.press('ControlOrMeta+Home');
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('Shift+ArrowRight');
+	await expect(page.locator('.cm-selectionBackground')).toHaveCount(1);
+	await expect(page.locator('.cm-selectionMatch')).toHaveCount(0);
+});
+
+test.describe('linking the graph and the code', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	/**
+	 * The text selected in the editor, as the browser has it once the editor
+	 * has focus, which CodeMirror gives its selection to a frame later.
+	 */
+	async function selected(page: Page) {
+		await page.locator('.cm-content').focus();
+		return page.evaluate(() => getSelection()?.toString() ?? '');
+	}
+
+	/** The middle of row `row` of a graph of one box, which is centred on the canvas. */
+	async function rowOfOneBox(page: Page, row: number, rows: number) {
+		const box = (await page.locator('canvas').boundingBox())!;
+		return { x: box.x + box.width / 2, y: box.y + box.height / 2 + (row - (rows - 1) / 2) * 24 };
+	}
+
+	/** How many pixels of the canvas are in the colour that marks the linked row. */
+	async function markedPixels(page: Page) {
+		const png = (await page.locator('canvas').screenshot()).toString('base64');
+		return page.evaluate(async (png) => {
+			const image = await createImageBitmap(
+				await (await fetch(`data:image/png;base64,${png}`)).blob()
+			);
+			const context = new OffscreenCanvas(image.width, image.height).getContext('2d')!;
+			context.drawImage(image, 0, 0);
+			const data = context.getImageData(0, 0, image.width, image.height).data;
+			let count = 0;
+			// --brand in the light theme, #2457d6: the outline is drawn in it, and
+			// the blue of nested objects and arrays is not.
+			for (let i = 0; i < data.length; i += 4) {
+				const near =
+					Math.abs(data[i] - 0x24) < 12 &&
+					Math.abs(data[i + 1] - 0x57) < 12 &&
+					Math.abs(data[i + 2] - 0xd6) < 12;
+				if (near) count++;
+			}
+			return count;
+		}, png);
+	}
+
+	/** Puts the cursor of the editor `steps` characters from the start of the text. */
+	async function cursorAt(page: Page, steps: number) {
+		await page.locator('.cm-content').focus();
+		await page.keyboard.press('ControlOrMeta+Home');
+		for (let i = 0; i < steps; i++) await page.keyboard.press('ArrowRight');
+	}
+
+	const DOC = '{"name": "Ada ✓", "age": 36}';
+
+	test('selects in the code the value of a row clicked in the graph, and all of a node clicked on its edge', async ({
+		page
+	}) => {
+		const doc = '{"name": "Ada ✓", "langs": ["en", "fr"], "age": 36}';
+		await replaceSource(page, doc);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+		const age = await rowOfOneBox(page, 2, 3);
+		await page.mouse.click(age.x, age.y);
+		await expect.poll(() => selected(page)).toBe('36');
+
+		const name = await rowOfOneBox(page, 0, 3);
+		await page.mouse.click(name.x, name.y);
+		await expect.poll(() => selected(page)).toBe('"Ada ✓"');
+
+		// A row holding an array: all of the array.
+		const langs = await rowOfOneBox(page, 1, 3);
+		await page.mouse.click(langs.x, langs.y);
+		await expect.poll(() => selected(page)).toBe('["en", "fr"]');
+
+		// Just above its top edge: the node, brackets and all.
+		const top = await rowOfOneBox(page, 0, 3);
+		await page.mouse.move(top.x, top.y - 14);
+		await expect(page.locator('canvas')).toHaveCSS('cursor', 'pointer');
+		await page.mouse.click(top.x, top.y - 14);
+		await expect.poll(() => selected(page)).toBe(doc);
+
+		// Away from the nodes: nothing is selected, or marked.
+		const box = (await page.locator('canvas').boundingBox())!;
+		await page.mouse.click(box.x + 40, box.y + 40);
+		await expect.poll(() => selected(page)).toBe('');
+		await expect.poll(() => markedPixels(page)).toBeLessThan(5);
+	});
+
+	test('marks in the graph the row the cursor of the code is in', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await expect(page.getByText('1 node')).toBeVisible();
+		const away = async () => {
+			const box = (await page.locator('canvas').boundingBox())!;
+			await page.mouse.move(box.x + 10, box.y + 10);
+		};
+		// Clicked, the row of `age` is marked as the cursor marks it.
+		const age = await rowOfOneBox(page, 1, 2);
+		await page.mouse.click(age.x, age.y);
+		await away();
+		const clicked = await graphShot(page);
+		expect(await markedPixels(page)).toBeGreaterThan(20);
+
+		await cursorAt(page, DOC.indexOf('Ada'));
+		const onName = await graphShot(page);
+		expect(onName.equals(clicked)).toBe(false);
+		await cursorAt(page, DOC.indexOf('36'));
+		expect((await graphShot(page)).equals(clicked)).toBe(true);
+
+		// Typed ahead of the graph, nothing is marked until it catches up.
+		await page.keyboard.type('5');
+		await expect.poll(() => markedPixels(page)).toBeLessThan(5);
+		await expect.poll(() => markedPixels(page)).toBeGreaterThan(20);
+	});
+
+	test('brings the row of the cursor onto the screen', async ({ page }) => {
+		const items = Array.from({ length: 300 }, (_, i) => `{"item": ${i}}`);
+		await replaceSource(page, `[${items.join(', ')}]`);
+		await expect(page.getByText('301 nodes')).toBeVisible();
+		// Inside the last item, whose box is far below the root.
+		await page.locator('.cm-content').focus();
+		await page.keyboard.press('ControlOrMeta+End');
+		await page.keyboard.press('ArrowLeft');
+		await page.keyboard.press('ArrowLeft');
+		await expect.poll(() => markedPixels(page)).toBeGreaterThan(20);
+	});
+
+	test('is turned off in Settings', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await expect(page.getByText('1 node')).toBeVisible();
+		await page.getByRole('button', { name: 'Settings' }).click();
+		const link = page.getByRole('menuitemcheckbox', { name: 'Link the graph and the code' });
+		await expect(link).toBeChecked();
+		await link.click();
+		await page.keyboard.press('Escape');
+		await expect(page.getByRole('menu')).toBeHidden();
+
+		const age = await rowOfOneBox(page, 1, 2);
+		await page.mouse.click(age.x, age.y);
+		expect(await selected(page)).toBe('');
+		await cursorAt(page, DOC.indexOf('36'));
+		expect(await markedPixels(page)).toBeLessThan(5);
+	});
+});
+
 test.describe('Settings', () => {
 	test.beforeEach(async ({ page }) => {
 		await expect(page.getByRole('status')).toBeHidden();

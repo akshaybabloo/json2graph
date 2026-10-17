@@ -13,6 +13,8 @@ export interface Theme {
 	null: string;
 	/** The `{3}` / `[5]` summary of a nested object or array. */
 	container: string;
+	/** The mark on the row that the cursor of the code is in, or that was clicked. */
+	link: string;
 }
 
 /**
@@ -34,6 +36,7 @@ export function readTheme(element: Element): Theme {
 		string: token('--json-string', '#15803d'),
 		number: token('--json-number', '#b45309'),
 		boolean: token('--json-boolean', '#7c3aed'),
-		container: token('--json-container', '#0369a1')
+		container: token('--json-container', '#0369a1'),
+		link: token('--brand', '#2457d6')
 	};
 }

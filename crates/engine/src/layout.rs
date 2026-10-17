@@ -13,8 +13,11 @@
 //!
 //! A box can be collapsed into its row in the parent. It and its descendants
 //! are then not drawn and take no room, and the boxes around them close up.
+//!
+//! With the spans of the containers, rows lead back to where they are in the
+//! source, and a place in the source leads to the row that shows it.
 
-use crate::parse::{Kind, NONE, Value};
+use crate::parse::{Index, Kind, NONE, Span, Value};
 use crate::wrap;
 
 /// Pixel sizes and text limits supplied by the renderer.
@@ -89,11 +92,26 @@ pub struct Graph {
     /// One bit per box, set for the collapsed ones. Empty until a box is
     /// collapsed.
     collapsed: Vec<u64>,
+    /// Where the containers are in the source, sorted by value. Empty when
+    /// the graph was built without them.
+    spans: Vec<Span>,
 }
 
+/// A box, and one of its rows or the box as a whole.
+pub type Place = (u32, Option<u32>);
+
 impl Graph {
+    /// Builds the boxes for the values of an index produced by
+    /// [`crate::parse`], which then lead to no place in the source.
+    pub fn new(values: Vec<Value>) -> Graph {
+        Graph::from_index(Index {
+            values,
+            spans: Vec::new(),
+        })
+    }
+
     /// Builds the boxes for an index produced by [`crate::parse`].
-    pub fn new(mut values: Vec<Value>) -> Graph {
+    pub fn from_index(Index { mut values, spans }: Index) -> Graph {
         let root = values.len() as u32 - 1;
         let root_value = values[root as usize];
         let new_box = |entry, first, parent| BoxRec {
@@ -122,6 +140,7 @@ impl Graph {
             boxes: Vec::new(),
             expanded: Vec::new(),
             collapsed: Vec::new(),
+            spans,
         };
         let mut i = 0;
         while i < boxes.len() {
@@ -391,6 +410,176 @@ impl Graph {
             self.collapsed[0] &= !1;
         }
         self.place(m);
+    }
+
+    /// Where value `index` is in the source: the token of a primitive, the
+    /// brackets and all between them of a container.
+    fn value_range(&self, index: u32) -> Option<(u32, u32)> {
+        let value = &self.values[index as usize];
+        if !value.is_container() {
+            return Some((value.a, value.a + value.b));
+        }
+        let at = self.spans.binary_search_by_key(&index, |s| s.value).ok()?;
+        let span = &self.spans[at];
+        Some((span.start, span.end))
+    }
+
+    /// Where the value in `row` of `b` is in the source: a datum, or the
+    /// brackets and all between them of an object or array.
+    pub fn row_range(&self, b: &BoxRec, row: u32) -> Option<(u32, u32)> {
+        self.value_range(b.first + row)
+    }
+
+    /// Where all of `row` of `b` is in the source: its value, from its key
+    /// when the key is written there, as it is in an object but not in a CSV
+    /// record.
+    pub fn row_extent(&self, b: &BoxRec, row: u32) -> Option<(u32, u32)> {
+        let index = b.first + row;
+        let (start, end) = self.value_range(index)?;
+        if b.entry == NONE || self.is_array(b) {
+            return Some((start, end));
+        }
+        let (open, _) = self.value_range(b.entry)?;
+        // The opening quote of the key.
+        let key = self.values[index as usize].key_off.checked_sub(1);
+        Some(match key {
+            Some(key) if open < key && key < start => (key, end),
+            _ => (start, end),
+        })
+    }
+
+    /// Where a place is in the source: the value of a row, or the whole of a
+    /// box.
+    pub fn source_range(&self, (id, row): Place) -> Option<(u32, u32)> {
+        let b = &self.boxes[id as usize];
+        match row {
+            Some(row) => self.row_range(b, row),
+            None if b.entry == NONE => self.row_range(b, 0),
+            None => self.value_range(b.entry),
+        }
+    }
+
+    /// Where a place is in the source, with the key of a row.
+    pub fn extent(&self, (id, row): Place) -> Option<(u32, u32)> {
+        match row {
+            Some(row) => self.row_extent(&self.boxes[id as usize], row),
+            None => self.source_range((id, None)),
+        }
+    }
+
+    /// The place that shows byte `offset` of the source, however deep: the
+    /// row whose key or value it is in, or the box it is in between rows.
+    /// None outside the document, or when the graph has no spans.
+    pub fn locate(&self, offset: u32) -> Option<Place> {
+        let within = |(start, end): (u32, u32)| start <= offset && offset <= end;
+        let root = &self.boxes[0];
+        if root.entry == NONE {
+            return within(self.row_range(root, 0)?).then_some((0, Some(0)));
+        }
+        if !within(self.value_range(root.entry)?) {
+            return None;
+        }
+        let mut id = 0;
+        loop {
+            let b = &self.boxes[id as usize];
+            // Rows are in the order of the source: the last that starts at or
+            // before the offset is the only one that can hold it.
+            let (mut low, mut high) = (0, self.row_count(b));
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if self.row_extent(b, mid)?.0 <= offset {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            let Some(row) = low.checked_sub(1) else {
+                return Some((id, None));
+            };
+            let (_, end) = self.row_extent(b, row)?;
+            if offset > end {
+                return Some((id, None));
+            }
+            let index = b.first + row;
+            let value = &self.values[index as usize];
+            if value.is_container() && value.b > 0 && offset >= self.value_range(index)?.0 {
+                // Inside the brackets of a box of its own, rather than on its key.
+                id = value.a;
+                continue;
+            }
+            return Some((id, Some(row)));
+        }
+    }
+
+    /// The place on screen that shows `place`: itself, or, when it is inside
+    /// a collapsed box, the row that the outermost such box is collapsed into.
+    pub fn shown(&self, place: Place) -> Place {
+        let mut shown = place;
+        let mut id = place.0;
+        while id != 0 {
+            let b = &self.boxes[id as usize];
+            if self.is_collapsed(id) {
+                let parent = &self.boxes[b.parent as usize];
+                shown = (b.parent, Some(b.entry - parent.first));
+            }
+            id = b.parent;
+        }
+        shown
+    }
+
+    /// The world rectangle of a place, as `(x, y, width, height)`: a row with
+    /// all of its lines, or the whole of a box.
+    pub fn rect(&self, m: &Metrics, (id, row): Place) -> (f64, f64, f64, f64) {
+        let b = &self.boxes[id as usize];
+        let (x, w) = (b.x as f64, b.w as f64);
+        let Some(row) = row else {
+            return (x, self.box_top(b, m), w, self.box_height(b, m));
+        };
+        let index = b.first + row;
+        let expansions = self.expansions(b);
+        let extra = expansions
+            .binary_search_by_key(&index, |e| e.0)
+            .map_or(0, |at| expansions[at].1);
+        let lines = 1 + extra as u64;
+        (x, self.row_top(b, row, m), w, lines as f64 * m.row_h)
+    }
+
+    /// The box whose border a world position is within `margin` of, inside
+    /// or out.
+    pub fn edge_at(&self, m: &Metrics, x: f64, y: f64, margin: f64) -> Option<u32> {
+        let probes = [
+            (0.0, 0.0),
+            (-margin, 0.0),
+            (margin, 0.0),
+            (0.0, -margin),
+            (0.0, margin),
+        ];
+        probes.iter().find_map(|&(dx, dy)| {
+            let id = self.box_at(m, x + dx, y + dy)?;
+            let b = &self.boxes[id as usize];
+            let (left, top) = (b.x as f64, self.box_top(b, m));
+            let (right, bottom) = (left + b.w as f64, top + self.box_height(b, m));
+            let around = left - margin <= x
+                && x <= right + margin
+                && top - margin <= y
+                && y <= bottom + margin;
+            let inside =
+                left + margin < x && x < right - margin && top + margin < y && y < bottom - margin;
+            (around && !inside).then_some(id)
+        })
+    }
+
+    /// The place at a world position that leads to the source: a whole box
+    /// on its border, within `edge` of it, and a row inside it. None on the
+    /// control that collapses a box, and away from the boxes.
+    pub fn place_at(&self, m: &Metrics, x: f64, y: f64, edge: f64) -> Option<Place> {
+        if self.collapsible_at(m, x, y).is_some() {
+            return None;
+        }
+        if let Some(id) = self.edge_at(m, x, y, edge) {
+            return Some((id, None));
+        }
+        self.hit(m, x, y).map(|(id, row)| (id, Some(row)))
     }
 
     pub fn layout(&mut self, m: &Metrics) {

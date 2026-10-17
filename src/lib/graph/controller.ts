@@ -5,6 +5,7 @@ import type {
 	ExportOptions,
 	FromWorker,
 	GraphStats,
+	LinkEvent,
 	LoadEvent,
 	ToWorker
 } from './protocol';
@@ -43,7 +44,10 @@ export class GraphController {
 	#exported = 0;
 	#disconnect: () => void;
 
-	constructor(canvas: HTMLCanvasElement, onEvent: (event: LoadEvent | EngineEvent) => void) {
+	constructor(
+		canvas: HTMLCanvasElement,
+		onEvent: (event: LoadEvent | EngineEvent | LinkEvent) => void
+	) {
 		this.#canvas = canvas;
 		this.#worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 		this.#worker.addEventListener('message', (event: MessageEvent<FromWorker>) => {
@@ -69,7 +73,11 @@ export class GraphController {
 				this.#exports.delete(message.id);
 				return;
 			}
-			if (message.type === 'engine') {
+			if (message.type === 'reveal') {
+				this.#reveal(message);
+				return;
+			}
+			if (message.type === 'engine' || message.type === 'link') {
 				onEvent(message);
 				return;
 			}
@@ -261,9 +269,24 @@ export class GraphController {
 		});
 	}
 
-	/** Draws connections as `connections` says, and labels them with keys or not. */
-	configure({ connections, connectionKeys }: Pick<Settings, 'connections' | 'connectionKeys'>) {
-		this.#post({ type: 'settings', connections, connectionKeys });
+	/**
+	 * Draws connections as `connections` says, labels them with keys or not,
+	 * and has a click on a row lead to the source or not.
+	 */
+	configure({
+		connections,
+		connectionKeys,
+		linkCode
+	}: Pick<Settings, 'connections' | 'connectionKeys' | 'linkCode'>) {
+		this.#post({ type: 'settings', connections, connectionKeys, linkCode });
+	}
+
+	/**
+	 * Marks the row that holds byte `offset` of the source of the graph on
+	 * screen, or none. With `reveal`, a row off the screen is brought onto it.
+	 */
+	locate(offset: number | null, reveal = true) {
+		this.#post({ type: 'locate', offset, reveal });
 	}
 
 	/** Collapses every box into its row, leaving the root, or shows every box again. */
@@ -320,6 +343,18 @@ export class GraphController {
 	/** Lets the user zoom out until the whole graph is half the size of the canvas. */
 	#limitZoom(fitScale: number) {
 		this.#zoom.scaleExtent([Math.max(Math.min(fitScale, 1) / 2, 1e-9), MAX_SCALE]);
+	}
+
+	/**
+	 * Moves the view, at the same scale, to show a rectangle of the world:
+	 * centred, or from its top or left edge when it is too large for that.
+	 */
+	#reveal({ x, y, width, height }: { x: number; y: number; width: number; height: number }) {
+		const { k } = zoomTransform(this.#canvas);
+		const { clientWidth, clientHeight } = this.#canvas;
+		const along = (start: number, size: number, room: number) =>
+			size * k <= room - 2 * MARGIN ? room / 2 - (start + size / 2) * k : MARGIN - start * k;
+		this.#setView(along(x, width, clientWidth), along(y, height, clientHeight), k);
 	}
 
 	/** Moves the graph by a distance in screen pixels. */

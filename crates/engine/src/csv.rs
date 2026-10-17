@@ -10,7 +10,7 @@
 //! break (LF, CRLF or CR), and blank lines are no records. A quoted field
 //! points between its quotes, with doubled quotes left as written.
 
-use crate::parse::{Kind, NONE, ParseError, Value};
+use crate::parse::{Index, Kind, NONE, ParseError, Span, Value};
 
 /// Keys longer than this are cut short, as they cannot be packed into [`Value`].
 const MAX_KEY_LEN: usize = (1 << 24) - 1;
@@ -33,6 +33,8 @@ pub struct CsvParser {
     fields: Vec<Value>,
     /// One object for each record.
     rows: Vec<Value>,
+    /// Where each record is, without its line break.
+    lines: Vec<(u32, u32)>,
     record: Vec<Field>,
 }
 
@@ -44,6 +46,7 @@ impl CsvParser {
             columns: None,
             fields: Vec::new(),
             rows: Vec::new(),
+            lines: Vec::new(),
             record: Vec::new(),
         }
     }
@@ -78,21 +81,44 @@ impl CsvParser {
     /// The finished index: the fields, then the objects of the records, then
     /// the array of them, which is the root.
     pub fn finish(self) -> Vec<Value> {
+        self.index().values
+    }
+
+    /// The finished index, with the spans of the records and of the whole.
+    pub fn index(self) -> Index {
         let mut values = self.fields;
         let first_row = values.len() as u32;
         let rows = self.rows.len() as u32;
         values.extend(self.rows);
         values.push(Value::new(Kind::Array, (0, 0), first_row, rows));
         values.shrink_to_fit();
-        values
+        let mut spans: Vec<Span> = (self.lines.iter().enumerate())
+            .map(|(row, &(start, end))| Span {
+                value: first_row + row as u32,
+                start,
+                end,
+            })
+            .collect();
+        spans.push(Span {
+            value: first_row + rows,
+            start: 0,
+            end: self.pos as u32,
+        });
+        Index { values, spans }
     }
 
     /// Reads the record at `pos`, and the line break after it.
     fn record(&mut self, src: &[u8]) {
         self.record.clear();
+        let start = self.pos as u32;
+        // Where the record ends, before its line break.
+        let mut end = src.len() as u32;
         loop {
             let field = self.field(src);
             self.record.push(field);
+            if src.get(self.pos).is_some_and(|&c| c != self.delimiter) {
+                end = self.pos as u32;
+            }
             match src.get(self.pos) {
                 Some(&c) if c == self.delimiter => {
                     self.pos += 1;
@@ -162,6 +188,7 @@ impl CsvParser {
         }
         self.rows
             .push(Value::new(Kind::Object, (0, 0), first, count as u32));
+        self.lines.push((start, end));
     }
 
     /// Reads the field at `pos`, leaving `pos` at the delimiter or line break

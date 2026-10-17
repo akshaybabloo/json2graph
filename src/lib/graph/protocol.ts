@@ -42,8 +42,11 @@ export type ToWorker =
 	  }
 	| { type: 'resize'; width: number; height: number; dpr: number }
 	| { type: 'theme'; theme: Theme }
-	/** How connections are drawn, and whether they are labelled with the keys of the nodes they lead to. */
-	| { type: 'settings'; connections: Connections; connectionKeys: boolean }
+	/**
+	 * How connections are drawn, whether they are labelled with the keys of
+	 * the nodes they lead to, and whether a click on a row leads to the source.
+	 */
+	| { type: 'settings'; connections: Connections; connectionKeys: boolean; linkCode: boolean }
 	/** Screen = world * k + (x, y). */
 	| { type: 'view'; x: number; y: number; k: number }
 	/**
@@ -67,6 +70,11 @@ export type ToWorker =
 	| { type: 'hover'; x: number; y: number }
 	/** The pointer left the canvas. */
 	| { type: 'leave' }
+	/**
+	 * Marks the row that holds byte `offset` of the source of the graph on
+	 * screen, or none. With `reveal`, a row off the screen is brought onto it.
+	 */
+	| { type: 'locate'; offset: number | null; reveal: boolean }
 	| { type: 'export'; id: number; options: ExportOptions };
 
 /** The steps of a load. Only YAML is converted, to JSON, and how far that has got is not known. */
@@ -80,6 +88,16 @@ export type LoadEvent =
 	| { type: 'error'; id: number; message: string };
 
 /**
+ * A row of the graph on screen was clicked, which is bytes `start` to `end` of
+ * its source: its value, or, on the edge of a box, the brackets and all between
+ * them. A click away from the boxes leaves `range` none.
+ */
+export interface LinkEvent {
+	type: 'link';
+	range: { start: number; end: number } | null;
+}
+
+/**
  * The WebAssembly engine has loaded, or failed to with `error`. The worker
  * can show nothing before it has, and nothing at all if it failed.
  */
@@ -91,6 +109,9 @@ export interface EngineEvent {
 export type FromWorker =
 	| LoadEvent
 	| EngineEvent
+	| LinkEvent
+	/** The marked row is off the screen: the view should move to show this rectangle of the world. */
+	| { type: 'reveal'; x: number; y: number; width: number; height: number }
 	/**
 	 * A value was expanded or a box collapsed, or the reverse: the graph has a
 	 * new size, and the view has moved so that the clicked row stays where it
@@ -108,7 +129,7 @@ export type FromWorker =
 			rootHeight: number;
 			home: boolean;
 	  }
-	/** Whether the pointer is over something that a click expands or collapses. */
+	/** Whether the pointer is over something that a click expands or collapses, or selects as a whole in the code. */
 	| { type: 'cursor'; expandable: boolean }
 	/** The PNG asked for by the `export` with the same `id`; null when there is no graph. */
 	| { type: 'image'; id: number; blob: Blob | null };

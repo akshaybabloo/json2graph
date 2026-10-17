@@ -27,6 +27,8 @@ const GAP_Y = 20;
  */
 const TOGGLE_SIZE = 12;
 const TOGGLE_HIT = 18;
+/** How near the border of a box a click selects all of it in the code, rather than a row, in pixels. */
+const EDGE_HIT = 5;
 const RADIUS = 6;
 const ARROW = 7;
 /** The size of the keys written on edges, a little smaller than the text in the boxes. */
@@ -55,6 +57,10 @@ const EXPORT_MIN_SCALE = 0.5;
 const EXPORT_MARGIN = 24;
 /** How much of the graph is hidden while the path to the box under the pointer is shown. */
 const FOCUS_VEIL = 0.75;
+/** How strongly the linked row is tinted. */
+const LINK_TINT = 0.14;
+/** How much of the start of the linked row must be on screen for it to count as shown, in pixels. */
+const REVEAL_START = 48;
 /**
  * The edges of that path are dashed, and the dashes run the way the edges
  * point: lengths in world pixels, speed in world pixels a second.
@@ -120,6 +126,13 @@ let motion = true;
 /** How connections are drawn, and whether they carry keys: see `src/lib/settings.svelte.ts`. */
 let connections: Connections = 'curved';
 let connectionKeys = false;
+/** Whether a click on a row leads to the source. */
+let linkCode = true;
+/**
+ * The row, or box, that the cursor of the code is in or that was clicked, as
+ * `[box, row]` with the row `NONE` for a whole box; it is marked on screen.
+ */
+let linked: [number, number] | null = null;
 
 const decoder = new TextDecoder();
 /** Decoded keys and values of recently drawn rows, by byte offset. */
@@ -148,6 +161,8 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			break;
 		case 'settings': {
 			connections = message.connections;
+			linkCode = message.linkCode;
+			if (!linkCode) linked = null;
 			const keysChanged = connectionKeys !== message.connectionKeys;
 			connectionKeys = message.connectionKeys;
 			// The gap between boxes makes room for keys, or gives it back. The
@@ -196,6 +211,9 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 			pointer = null;
 			if (focus !== NONE) requestDraw();
 			break;
+		case 'locate':
+			locate(message.offset, message.reveal);
+			break;
 		case 'export':
 			exportImage(message.id, message.options);
 			break;
@@ -227,14 +245,59 @@ function textVisible(): boolean {
 	return FONT_SIZE * view.k >= MIN_TEXT_PX;
 }
 
-/** Expands the value under the pointer onto wrapped lines, or collapses it again. */
+/**
+ * Expands the value under the pointer onto wrapped lines, or collapses it
+ * again, and marks the row clicked, which the page selects in the source.
+ */
 function click(x: number, y: number) {
 	if (!doc || !textVisible()) return;
+	// Found before the boxes move.
+	const source = linkCode ? doc.source_at(view.x, view.y, view.k, x, y, EDGE_HIT) : [];
 	const moved = doc.toggle_at(view.x, view.y, view.k, x, y);
+	if (source.length === 4) {
+		const [box, row, start, end] = source;
+		linked = [box, row];
+		post({ type: 'link', range: { start, end } });
+		requestDraw();
+	} else if (linkCode && Number.isNaN(moved)) {
+		// Away from the boxes: nothing is marked, or selected.
+		linked = null;
+		post({ type: 'link', range: null });
+		requestDraw();
+	}
 	if (Number.isNaN(moved)) return;
 	// The boxes have been repositioned: keep the clicked row where it was.
 	view = { ...view, y: view.y - moved * view.k };
 	relaid(false);
+}
+
+/**
+ * Marks the row that holds byte `offset` of the source, or none, and with
+ * `reveal` moves the view to it when it is off the screen.
+ */
+function locate(offset: number | null, reveal: boolean) {
+	const place = doc && offset !== null ? doc.locate(offset) : [];
+	linked = place.length === 2 ? [place[0], place[1]] : null;
+	requestDraw();
+	const shown = shownLinked();
+	if (!doc || !shown || !reveal) return;
+	const [x, y, width, height] = doc.place_rect(shown[0], shown[1]);
+	const left = x * view.k + view.x;
+	const top = y * view.k + view.y;
+	// Its start must be on screen, and all of its height.
+	const onScreen =
+		left >= 0 &&
+		left <= size.width - REVEAL_START &&
+		top >= 0 &&
+		top + height * view.k <= size.height;
+	if (!onScreen) post({ type: 'reveal', x, y, width, height });
+}
+
+/** The row or box on screen that shows the linked one, which may be inside a collapsed box. */
+function shownLinked(): [number, number] | null {
+	if (!doc || !linked) return null;
+	const [box, row] = doc.shown(linked[0], linked[1]);
+	return [box, row];
 }
 
 function collapseAll(collapsed: boolean) {
@@ -263,10 +326,19 @@ function hover(x: number, y: number) {
 	pointer = { x, y };
 	if (focusAt() !== focus) requestDraw();
 	const expandable =
-		doc !== null && textVisible() && doc.expandable_at(view.x, view.y, view.k, x, y);
+		doc !== null &&
+		textVisible() &&
+		(doc.expandable_at(view.x, view.y, view.k, x, y) || onEdge(x, y));
 	if (expandable === hovering) return;
 	hovering = expandable;
 	post({ type: 'cursor', expandable });
+}
+
+/** Whether a click at a position selects a whole box in the code, which it does on the border of the box. */
+function onEdge(x: number, y: number): boolean {
+	if (!doc || !linkCode) return false;
+	const source = doc.source_at(view.x, view.y, view.k, x, y, EDGE_HIT);
+	return source.length === 4 && source[1] === NONE;
 }
 
 /**
@@ -466,6 +538,7 @@ function statsOf({ doc, bytes, ms }: Kept): GraphStats {
 /** Puts a document on screen. Documents are freed by `drop`, not here. */
 function show(next: Document | null) {
 	doc = next;
+	linked = null;
 	sourcePtr = next ? next.source_ptr() : 0;
 	strings.clear();
 	hovering = false;
@@ -487,7 +560,8 @@ function draw() {
 	render(ctx, size.width, size.height, size.dpr, view, {
 		background: theme.background,
 		grid: true,
-		focus
+		focus,
+		linked: shownLinked()
 	});
 	// The path in focus is animated, so it needs a frame after this one.
 	if (focus !== NONE && motion) requestDraw();
@@ -500,6 +574,8 @@ interface Scene {
 	grid: boolean;
 	/** The box whose path from the root stands out from a dimmed graph, or `NONE`. */
 	focus: number;
+	/** The row, or box, that is marked, as `[box, row]`: see `linked`. */
+	linked: [number, number] | null;
 }
 
 /**
@@ -522,7 +598,8 @@ async function exportImage(id: number, options: ExportOptions) {
 	const scene = {
 		background: options.background ?? theme.background,
 		grid: options.grid,
-		focus: NONE
+		focus: NONE,
+		linked: null
 	};
 	if (whole) {
 		const offset = EXPORT_MARGIN * scale;
@@ -554,16 +631,38 @@ function render(
 	const text = FONT_SIZE * k >= MIN_TEXT_PX;
 	doc.query(view.x, view.y, k, width, height, text);
 	drawFrame(ctx, k, text, false, scene.background);
-	if (scene.focus === NONE) return;
+	if (scene.focus !== NONE) {
+		// The graph fades behind a veil of the background, and the path to the
+		// box in focus is drawn again over it.
+		ctx.fillStyle = scene.background;
+		ctx.globalAlpha = FOCUS_VEIL;
+		ctx.fillRect(0, 0, width, height);
+		ctx.globalAlpha = 1;
+		doc.query_path(scene.focus, view.x, view.y, k, width, height, text);
+		drawFrame(ctx, k, text, true, scene.background);
+	}
+	if (scene.linked) drawLink(ctx, view, scene.linked);
+}
 
-	// The graph fades behind a veil of the background, and the path to the
-	// box in focus is drawn again over it.
-	ctx.fillStyle = scene.background;
-	ctx.globalAlpha = FOCUS_VEIL;
-	ctx.fillRect(0, 0, width, height);
+/** Marks a row, or a whole box, with a tint and an outline. */
+function drawLink(
+	ctx: OffscreenCanvasRenderingContext2D,
+	view: { x: number; y: number; k: number },
+	[box, row]: [number, number]
+) {
+	if (!doc) return;
+	const [x, y, w, h] = doc.place_rect(box, row);
+	const k = view.k;
+	const radius = Math.min((row === NONE ? RADIUS : RADIUS / 2) * k, (h * k) / 2);
+	ctx.beginPath();
+	ctx.roundRect(x * k + view.x, y * k + view.y, w * k, h * k, radius);
+	ctx.fillStyle = theme.link;
+	ctx.globalAlpha = LINK_TINT;
+	ctx.fill();
 	ctx.globalAlpha = 1;
-	doc.query_path(scene.focus, view.x, view.y, k, width, height, text);
-	drawFrame(ctx, k, text, true, scene.background);
+	ctx.strokeStyle = theme.link;
+	ctx.lineWidth = Math.min(Math.max(k * 1.5, 1), 2);
+	ctx.stroke();
 }
 
 /**
