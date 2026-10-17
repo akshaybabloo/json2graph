@@ -75,6 +75,14 @@ export type ToWorker =
 	 * screen, or none. With `reveal`, a row off the screen is brought onto it.
 	 */
 	| { type: 'locate'; offset: number | null; reveal: boolean }
+	/**
+	 * Finds the rows whose key or value holds `text`, ignoring case unless
+	 * `matchCase`, marks them, and goes to the first. No text finds nothing.
+	 * The search is made again in each document shown after it.
+	 */
+	| { type: 'search'; text: string; matchCase: boolean }
+	/** Goes to the next row found, or with -1 to the one before, round from the last to the first. */
+	| { type: 'step'; by: 1 | -1 }
 	| { type: 'export'; id: number; options: ExportOptions };
 
 /** The steps of a load. Only YAML is converted, to JSON, and how far that has got is not known. */
@@ -98,6 +106,16 @@ export interface LinkEvent {
 }
 
 /**
+ * What the search found in the graph on screen: `count` rows, of which the
+ * one at `current` is gone to, or none while `current` is -1.
+ */
+export interface FoundEvent {
+	type: 'found';
+	count: number;
+	current: number;
+}
+
+/**
  * The WebAssembly engine has loaded, or failed to with `error`. The worker
  * can show nothing before it has, and nothing at all if it failed.
  */
@@ -110,8 +128,13 @@ export type FromWorker =
 	| LoadEvent
 	| EngineEvent
 	| LinkEvent
-	/** The marked row is off the screen: the view should move to show this rectangle of the world. */
-	| { type: 'reveal'; x: number; y: number; width: number; height: number }
+	| FoundEvent
+	/**
+	 * The marked row is off the screen: the view should move to show this
+	 * rectangle of the world. With `zoom`, a view too small to read it in is
+	 * zoomed in as well.
+	 */
+	| { type: 'reveal'; x: number; y: number; width: number; height: number; zoom: boolean }
 	/**
 	 * A value was expanded or a box collapsed, or the reverse: the graph has a
 	 * new size, and the view has moved so that the clicked row stays where it

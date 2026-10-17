@@ -9,12 +9,14 @@ pub mod csv;
 pub mod layout;
 pub mod parse;
 pub mod query;
+pub mod search;
 pub mod wrap;
 
 use csv::CsvParser;
 use layout::{Graph, Metrics, Place};
 use parse::{Index, NONE, ParseError, Parser};
 use query::{Frame, View};
+use search::Needle;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -24,6 +26,8 @@ pub struct Document {
     graph: Option<Graph>,
     metrics: Option<Metrics>,
     frame: Frame,
+    /// The rows the last search found, in the order they are read.
+    found: Vec<Place>,
 }
 
 #[wasm_bindgen]
@@ -37,6 +41,7 @@ impl Document {
             graph: None,
             metrics: None,
             frame: Frame::default(),
+            found: Vec::new(),
         }
     }
 
@@ -274,6 +279,40 @@ impl Document {
     pub fn place_rect(&self, id: u32, row: u32) -> Vec<f64> {
         let (x, y, w, h) = self.graph().rect(self.metrics(), place(id, row));
         vec![x, y, w, h]
+    }
+
+    /// Where `row` of box `id` is in the source, or the whole box when `row` is
+    /// `u32::MAX`, as `[start, end]` in bytes. Empty where it is not known.
+    pub fn source_range(&self, id: u32, row: u32) -> Vec<u32> {
+        self.graph()
+            .source_range(place(id, row))
+            .map_or_else(Vec::new, |(start, end)| vec![start, end])
+    }
+
+    /// Finds the rows whose key or value holds `text`, ignoring case unless
+    /// `match_case`, in place of those found before, and returns how many
+    /// there are. Nothing is found for no text.
+    pub fn search(&mut self, text: &str, match_case: bool) -> u32 {
+        let needle = Needle::new(text, match_case);
+        let graph = self.graph.as_mut().expect("document is not parsed yet");
+        self.found = search::search(graph, &self.source, &needle);
+        graph.set_found(&self.found);
+        self.found.len() as u32
+    }
+
+    /// The row the last search found at `i`, in the order they are read, as
+    /// `[box, row]`. Empty past the last.
+    pub fn found(&self, i: u32) -> Vec<u32> {
+        self.found
+            .get(i as usize)
+            .map_or_else(Vec::new, |&(id, row)| vec![id, row.unwrap_or(NONE)])
+    }
+
+    /// Shows box `id`, and every box it is inside, that is collapsed. Returns
+    /// whether any was, which moves the boxes.
+    pub fn expand_to(&mut self, id: u32) -> bool {
+        let metrics = *self.metrics();
+        self.graph_mut().expand_to(&metrics, id)
     }
 
     /// Collapses every box into its row, leaving the root, or shows every box

@@ -57,6 +57,8 @@ pub const ROW_MORE: u32 = 1 << 18;
 pub const ROW_FIRST: u32 = 1 << 19;
 /// The box of the value in this row is collapsed into the row.
 pub const ROW_COLLAPSED: u32 = 1 << 20;
+/// A search found the row.
+pub const ROW_FOUND: u32 = 1 << 21;
 
 /// Screen = world * `k` + (`x`, `y`).
 #[derive(Clone, Copy, Debug)]
@@ -150,7 +152,12 @@ fn rows(
         } else {
             0
         };
-        let flags = value.kind() as u32 | key_mode << 8 | flags | first;
+        let found = if g.is_found(b.first + row) {
+            ROW_FOUND
+        } else {
+            0
+        };
+        let flags = value.kind() as u32 | key_mode << 8 | flags | first | found;
         out.extend([x, y, right, flags, key.0, key.1, text.0, text.1]);
     };
 

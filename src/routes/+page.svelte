@@ -19,6 +19,7 @@
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import PanelTopCloseIcon from '@lucide/svelte/icons/panel-top-close';
 	import PanelTopOpenIcon from '@lucide/svelte/icons/panel-top-open';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
@@ -29,6 +30,7 @@
 	import DiagramView, { type Diagram } from '#lib/components/diagram-view.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
+	import GraphSearch from '#lib/components/graph-search.svelte';
 	import Logo from '#lib/components/logo.svelte';
 	import PaneHandle from '#lib/components/pane-handle.svelte';
 	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
@@ -58,6 +60,7 @@
 	import type {
 		EngineEvent,
 		ExportOptions,
+		FoundEvent,
 		GraphStats,
 		LinkEvent,
 		LoadEvent
@@ -106,6 +109,7 @@
 	let controller: GraphController | undefined;
 	let diagramView = $state<DiagramView>();
 	let csvTable = $state<CsvTable>();
+	let graphSearch = $state<GraphSearch>();
 	let editor: JsonEditor | undefined;
 	/**
 	 * Whether the graph on screen was indexed from the text in the editor as
@@ -277,7 +281,11 @@
 		};
 	}
 
-	function onEvent(event: LoadEvent | EngineEvent | LinkEvent) {
+	function onEvent(event: LoadEvent | EngineEvent | LinkEvent | FoundEvent) {
+		if (event.type === 'found') {
+			found = { count: event.count, current: event.current };
+			return;
+		}
 		if (event.type === 'engine') {
 			engineReady = event.error === null;
 			engineError = event.error;
@@ -977,6 +985,38 @@
 	/** Whether the choices of the export are open, as the right-click menu can ask. */
 	let exportOpen = $state(false);
 
+	/** Whether the search of the graph is open, what it is for, and what it found. */
+	let searchOpen = $state(false);
+	let searchText = $state('');
+	let matchCase = $state(false);
+	let found = $state({ count: 0, current: -1 });
+
+	/** Opens the search of the graph, or puts the cursor back in it, and finds again what it was for. */
+	function openSearch() {
+		if (searchOpen) {
+			graphSearch?.focus();
+			return;
+		}
+		searchOpen = true;
+		if (searchText) controller?.search(searchText, matchCase);
+	}
+
+	/** Closes the search, which no longer marks what it found, and goes back to the graph. */
+	function closeSearch() {
+		searchOpen = false;
+		controller?.search('', false);
+		document.getElementById('graph')?.focus();
+	}
+
+	/** Ctrl+F, or Cmd+F, in the graph searches it, rather than the page, which cannot see into the canvas. */
+	function onGraphKey(event: KeyboardEvent) {
+		const find =
+			(event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f';
+		if (!find || isDiagram || !stats) return;
+		event.preventDefault();
+		openSearch();
+	}
+
 	function toggleAll() {
 		allCollapsed = !allCollapsed;
 		controller?.collapseAll(allCollapsed);
@@ -1366,6 +1406,7 @@
 													tabindex="0"
 													aria-label={graphLabel}
 													aria-describedby="graph-help"
+													onkeydown={onGraphKey}
 												></canvas>
 												{#if isDiagram}
 													<!-- A view of its own for each tab, which starts with the whole diagram. -->
@@ -1400,6 +1441,11 @@
 													</ContextMenu.Item>
 												{/each}
 												{#if !isDiagram}
+													<ContextMenu.Item onSelect={openSearch}>
+														<SearchIcon />
+														Find in the graph
+														<ContextMenu.Shortcut>Ctrl+F</ContextMenu.Shortcut>
+													</ContextMenu.Item>
 													<ContextMenu.Item onSelect={toggleAll}>
 														{#if allCollapsed}
 															<ChevronsUpDownIcon />
@@ -1447,6 +1493,17 @@
 													variant="ghost"
 													size="icon-sm"
 													disabled={!stats}
+													aria-label="Find in the graph"
+													aria-expanded={searchOpen}
+													title="Find in the graph (Ctrl+F)"
+													onclick={openSearch}
+												>
+													<SearchIcon />
+												</Button>
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													disabled={!stats}
 													aria-label={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
 													title={allCollapsed ? 'Expand all nodes' : 'Collapse all nodes'}
 													onclick={toggleAll}
@@ -1477,6 +1534,21 @@
 												onexport={exportImage}
 											/>
 										</div>
+
+										{#if searchOpen && !isDiagram}
+											<div class="absolute top-3 right-16 left-3 flex justify-end">
+												<GraphSearch
+													bind:this={graphSearch}
+													bind:text={searchText}
+													bind:matchCase
+													count={found.count}
+													current={found.current}
+													onsearch={(text, matchCase) => controller?.search(text, matchCase)}
+													onstep={(by) => controller?.step(by)}
+													onclose={closeSearch}
+												/>
+											</div>
+										{/if}
 
 										{#if progress && !isDiagram}
 											<div
@@ -1542,6 +1614,7 @@
 												With the keyboard: the arrow keys pan, plus and minus zoom, and zero fits
 												the
 												{viewName}.
+												{#if !isDiagram}Control F finds text in the graph.{/if}
 											</span>
 										</p>
 									</section>
