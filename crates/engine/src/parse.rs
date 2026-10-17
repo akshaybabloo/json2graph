@@ -3,7 +3,8 @@
 //! The source bytes are never copied or decoded. Every JSON value becomes one
 //! 16-byte [`Value`] that points back into the source, and the direct children
 //! of a container are stored next to each other so row `i` of a container is
-//! `values[first + i]`.
+//! `values[first + i]`. Where each object and array is in the source is kept
+//! apart, as a [`Span`], so that values stay small.
 
 /// Sentinel for "no index".
 pub const NONE: u32 = u32::MAX;
@@ -70,6 +71,23 @@ impl Value {
     }
 }
 
+/// Where an object or array is in the source: from its opening bracket to
+/// just past its closing one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    /// Index of the container's value.
+    pub value: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// A whole index: the values, the root last, and the spans of the
+/// containers among them, sorted by value.
+pub struct Index {
+    pub values: Vec<Value>,
+    pub spans: Vec<Span>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseError {
     pub offset: usize,
@@ -108,6 +126,8 @@ struct Frame {
     /// Where this container's children begin in `scratch`.
     start: usize,
     key: (u32, u32),
+    /// Byte offset of its opening bracket.
+    open: u32,
 }
 
 /// Resumable, non-recursive parser: nesting depth is limited by memory only,
@@ -119,7 +139,11 @@ pub struct Parser {
     stack: Vec<Frame>,
     /// Finished values whose parent container is still open.
     scratch: Vec<Value>,
+    /// Where the containers among `scratch` are, as `(place in scratch,
+    /// start, end)`, by place.
+    pending: Vec<(u32, u32, u32)>,
     values: Vec<Value>,
+    spans: Vec<Span>,
     key: (u32, u32),
 }
 
@@ -136,7 +160,9 @@ impl Parser {
             state: State::Value,
             stack: Vec::new(),
             scratch: Vec::new(),
+            pending: Vec::new(),
             values: Vec::new(),
+            spans: Vec::new(),
             key: (0, 0),
         }
     }
@@ -198,11 +224,37 @@ impl Parser {
     }
 
     /// The finished index. The root value is the last element.
-    pub fn finish(mut self) -> Vec<Value> {
+    pub fn finish(self) -> Vec<Value> {
+        self.index().values
+    }
+
+    /// The finished index, with the spans of its containers.
+    pub fn index(mut self) -> Index {
         debug_assert!(self.state == State::End && self.scratch.len() == 1);
+        let root = self.values.len() as u32;
+        self.settle(0, root);
         self.values.append(&mut self.scratch);
         self.values.shrink_to_fit();
-        self.values
+        self.spans.shrink_to_fit();
+        Index {
+            values: self.values,
+            spans: self.spans,
+        }
+    }
+
+    /// The containers in `scratch` from place `from` on are about to move to
+    /// `values`, from index `first`: their spans are settled under those
+    /// indices.
+    fn settle(&mut self, from: usize, first: u32) {
+        let at = self.pending.partition_point(|p| (p.0 as usize) < from);
+        for &(place, start, end) in &self.pending[at..] {
+            self.spans.push(Span {
+                value: first + place - from as u32,
+                start,
+                end,
+            });
+        }
+        self.pending.truncate(at);
     }
 
     fn skip_whitespace(&mut self, src: &[u8]) {
@@ -246,6 +298,7 @@ impl Parser {
                     kind,
                     start: self.scratch.len(),
                     key,
+                    open: start as u32,
                 });
                 self.pos += 1;
                 self.state = state;
@@ -273,8 +326,11 @@ impl Parser {
         let frame = self.stack.pop().expect("close without an open container");
         let first = self.values.len() as u32;
         let count = (self.scratch.len() - frame.start) as u32;
+        self.settle(frame.start, first);
         self.values.extend_from_slice(&self.scratch[frame.start..]);
         self.scratch.truncate(frame.start);
+        self.pending
+            .push((self.scratch.len() as u32, frame.open, self.pos as u32));
         self.scratch
             .push(Value::new(frame.kind, frame.key, first, count));
         self.value_done();
@@ -358,7 +414,12 @@ fn scan_literal(src: &[u8], start: usize, literal: &[u8]) -> Result<usize, Parse
 
 /// Parses a whole document in one go.
 pub fn parse(src: &[u8]) -> Result<Vec<Value>, ParseError> {
+    Ok(index(src)?.values)
+}
+
+/// Parses a whole document in one go, keeping the spans of its containers.
+pub fn index(src: &[u8]) -> Result<Index, ParseError> {
     let mut parser = Parser::new();
     while !parser.step(src, usize::MAX)? {}
-    Ok(parser.finish())
+    Ok(parser.index())
 }

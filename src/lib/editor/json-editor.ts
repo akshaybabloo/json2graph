@@ -1,17 +1,76 @@
-import { isolateHistory } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import {
+	autocompletion,
+	closeBrackets,
+	closeBracketsKeymap,
+	completionKeymap
+} from '@codemirror/autocomplete';
+import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands';
+import {
+	bracketMatching,
+	defaultHighlightStyle,
+	foldGutter,
+	foldKeymap,
+	HighlightStyle,
+	indentOnInput,
+	syntaxHighlighting
+} from '@codemirror/language';
+import { searchKeymap } from '@codemirror/search';
 import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
-import { EditorView, keymap, placeholder } from '@codemirror/view';
+import {
+	crosshairCursor,
+	drawSelection,
+	dropCursor,
+	EditorView,
+	highlightActiveLine,
+	highlightActiveLineGutter,
+	highlightSpecialChars,
+	keymap,
+	lineNumbers,
+	placeholder,
+	rectangularSelection
+} from '@codemirror/view';
 import { tags } from '@lezer/highlight';
-import { basicSetup } from 'codemirror';
 import { MONO_FONT } from '../fonts';
 import { indentGuides } from './indent-guides';
 
 /** How long typing must pause before an edit is reported. */
 const EDIT_DELAY = 300;
 
+/**
+ * CodeMirror's basic setup, less the highlight of every other copy of the
+ * text selected, which marks every bracket in a document of JSON.
+ */
+const setup: Extension = [
+	lineNumbers(),
+	highlightActiveLineGutter(),
+	highlightSpecialChars(),
+	history(),
+	foldGutter(),
+	drawSelection(),
+	dropCursor(),
+	EditorState.allowMultipleSelections.of(true),
+	indentOnInput(),
+	syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+	bracketMatching(),
+	closeBrackets(),
+	autocompletion(),
+	rectangularSelection(),
+	crosshairCursor(),
+	highlightActiveLine(),
+	keymap.of([
+		...closeBracketsKeymap,
+		...defaultKeymap,
+		...searchKeymap,
+		...historyKeymap,
+		...foldKeymap,
+		...completionKeymap
+	])
+];
+
 /** Marks a change made by `setText`, which is not an edit. */
 const external = Annotation.define<boolean>();
+/** Marks a selection made by `select`, which the user did not move to. */
+const shown = Annotation.define<boolean>();
 
 // Colours come from the page's design tokens, so the editor follows the theme
 // (and the `.dark` class) without being rebuilt.
@@ -35,7 +94,8 @@ const theme = EditorView.theme({
 	'.cm-activeLine': { backgroundColor: 'color-mix(in oklch, var(--muted) 50%, transparent)' },
 	'.cm-activeLineGutter': { color: 'var(--foreground)', backgroundColor: 'var(--muted)' },
 	'&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
-		{ backgroundColor: 'color-mix(in oklch, var(--ring) 40%, transparent)' },
+		// In the colour that marks the same row in the graph.
+		{ backgroundColor: 'color-mix(in oklch, var(--brand) 45%, transparent)' },
 	'&.cm-focused .cm-matchingBracket': {
 		backgroundColor: 'color-mix(in oklch, var(--ring) 40%, transparent)'
 	},
@@ -80,6 +140,8 @@ export type EditorHandlers = {
 	onFormat: () => void;
 	/** The editor became empty, or is no longer empty. */
 	onEmpty: (empty: boolean) => void;
+	/** The user moved the cursor, which is now at `offset`. */
+	onCursor?: (offset: number) => void;
 };
 
 /** A CodeMirror editor for the document of a tab, in its language, that reports edits once typing pauses. */
@@ -91,10 +153,10 @@ export class JsonEditor {
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#onEdit: (text: string) => void;
 
-	constructor(parent: HTMLElement, { onEdit, onFormat, onEmpty }: EditorHandlers) {
+	constructor(parent: HTMLElement, { onEdit, onFormat, onEmpty, onCursor }: EditorHandlers) {
 		this.#onEdit = onEdit;
 		this.#extensions = [
-			basicSetup,
+			setup,
 			this.#language.of([]),
 			theme,
 			syntaxHighlighting(highlighting),
@@ -107,15 +169,23 @@ export class JsonEditor {
 				drop: (event) => Boolean(event.dataTransfer?.files.length)
 			}),
 			EditorView.updateListener.of((update) => {
-				if (!update.docChanged) return;
-				const empty = update.state.doc.length === 0;
-				if (empty !== (update.startState.doc.length === 0)) onEmpty(empty);
-				if (update.transactions.some((tr) => tr.annotation(external))) return;
-				this.#cancel();
-				this.#timer = setTimeout(() => {
-					this.#timer = undefined;
-					onEdit(this.#view.state.doc.toString());
-				}, EDIT_DELAY);
+				const marked = (type: typeof external) =>
+					update.transactions.some((tr) => tr.annotation(type));
+				if (update.docChanged) {
+					const empty = update.state.doc.length === 0;
+					if (empty !== (update.startState.doc.length === 0)) onEmpty(empty);
+					if (!marked(external)) {
+						this.#cancel();
+						this.#timer = setTimeout(() => {
+							this.#timer = undefined;
+							onEdit(this.#view.state.doc.toString());
+						}, EDIT_DELAY);
+					}
+				}
+				// After an edit is noted as waiting, so that it is pending when the cursor is reported.
+				if (update.selectionSet && !marked(external) && !marked(shown)) {
+					onCursor?.(update.state.selection.main.head);
+				}
 			})
 		];
 		this.#view = new EditorView({ parent, extensions: this.#extensions });
@@ -172,6 +242,26 @@ export class JsonEditor {
 		}
 		const state = EditorState.create({ doc: saved, extensions: this.#extensions });
 		this.#view.setState(state.update({ effects: this.#language.reconfigure(language) }).state);
+	}
+
+	/** Selects `from` to `to` and scrolls it into view, without reporting the cursor as moved. */
+	select(from: number, to: number) {
+		this.#view.dispatch({
+			selection: { anchor: from, head: to },
+			effects: EditorView.scrollIntoView(from, { y: 'center' }),
+			annotations: shown.of(true)
+		});
+	}
+
+	/** Leaves the cursor where it is, with nothing selected, without reporting it as moved. */
+	deselect() {
+		const { head } = this.#view.state.selection.main;
+		this.#view.dispatch({ selection: { anchor: head }, annotations: shown.of(true) });
+	}
+
+	/** Where the cursor is. */
+	get cursor(): number {
+		return this.#view.state.selection.main.head;
 	}
 
 	/** Highlights and folds the document as being in `language`. */

@@ -12,8 +12,8 @@ pub mod query;
 pub mod wrap;
 
 use csv::CsvParser;
-use layout::{Graph, Metrics};
-use parse::{ParseError, Parser, Value};
+use layout::{Graph, Metrics, Place};
+use parse::{Index, NONE, ParseError, Parser};
 use query::{Frame, View};
 use wasm_bindgen::prelude::*;
 
@@ -60,8 +60,8 @@ impl Document {
         match parser.step(&self.source, budget) {
             Ok(false) => Ok(false),
             Ok(true) => {
-                let values = self.parser.take().unwrap().finish();
-                self.graph = Some(Graph::new(values));
+                let index = self.parser.take().unwrap().index();
+                self.graph = Some(Graph::from_index(index));
                 Ok(true)
             }
             Err(error) => {
@@ -226,6 +226,56 @@ impl Document {
         moved.unwrap_or(f64::NAN)
     }
 
+    /// The row or box at a screen position, under the view transform (`x`,
+    /// `y`, `k`), and where it is in the source: `[box, row, start, end]`,
+    /// with the row `u32::MAX` for a whole box and the range in bytes. A box
+    /// is had within `edge` screen pixels of its border, and the value of a
+    /// row inside it. Empty where nothing leads to the source, as on the
+    /// control that collapses a box.
+    pub fn source_at(
+        &self,
+        x: f64,
+        y: f64,
+        k: f64,
+        screen_x: f64,
+        screen_y: f64,
+        edge: f64,
+    ) -> Vec<u32> {
+        let graph = self.graph();
+        let (x, y) = ((screen_x - x) / k, (screen_y - y) / k);
+        let Some(place) = graph.place_at(self.metrics(), x, y, edge / k) else {
+            return Vec::new();
+        };
+        let Some((start, end)) = graph.source_range(place) else {
+            return Vec::new();
+        };
+        let (id, row) = place;
+        vec![id, row.unwrap_or(NONE), start, end]
+    }
+
+    /// The row or box that shows byte `offset` of the source, however deep,
+    /// as `[box, row]` with the row `u32::MAX` for a whole box. Empty outside
+    /// the document.
+    pub fn locate(&self, offset: u32) -> Vec<u32> {
+        self.graph()
+            .locate(offset)
+            .map_or_else(Vec::new, |(id, row)| vec![id, row.unwrap_or(NONE)])
+    }
+
+    /// The row or box on screen that shows `row` of box `id`: itself, or the
+    /// row of the collapsed box it is inside. As `[box, row]`, like `locate`.
+    pub fn shown(&self, id: u32, row: u32) -> Vec<u32> {
+        let (id, row) = self.graph().shown(place(id, row));
+        vec![id, row.unwrap_or(NONE)]
+    }
+
+    /// The world rectangle of `row` of box `id`, or of the whole box when
+    /// `row` is `u32::MAX`, as `[x, y, width, height]`.
+    pub fn place_rect(&self, id: u32, row: u32) -> Vec<f64> {
+        let (x, y, w, h) = self.graph().rect(self.metrics(), place(id, row));
+        vec![x, y, w, h]
+    }
+
     /// Collapses every box into its row, leaving the root, or shows every box
     /// again.
     pub fn collapse_all(&mut self, collapsed: bool) {
@@ -306,6 +356,11 @@ impl Document {
     }
 }
 
+/// A place from JavaScript, where `u32::MAX` stands for no row.
+fn place(id: u32, row: u32) -> Place {
+    (id, (row != NONE).then_some(row))
+}
+
 impl Document {
     fn graph(&self) -> &Graph {
         self.graph.as_ref().expect("document is not parsed yet")
@@ -341,10 +396,10 @@ impl Indexer {
         }
     }
 
-    fn finish(self) -> Vec<Value> {
+    fn index(self) -> Index {
         match self {
-            Indexer::Json(parser) => parser.finish(),
-            Indexer::Csv(parser) => parser.finish(),
+            Indexer::Json(parser) => parser.index(),
+            Indexer::Csv(parser) => parser.index(),
         }
     }
 }

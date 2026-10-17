@@ -13,12 +13,15 @@ export interface Settings {
 	keepTabs: boolean;
 	/** Whether a connection is labelled with the key of the node it leads to. */
 	connectionKeys: boolean;
+	/** Whether a row clicked in the graph is selected in the code, and the row at the cursor is marked in the graph. */
+	linkCode: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
 	connections: 'curved',
 	keepTabs: true,
-	connectionKeys: false
+	connectionKeys: false,
+	linkCode: true
 };
 
 const STORAGE_KEY = 'settings';
@@ -39,6 +42,7 @@ export function loadSettings() {
 	}
 	if (typeof stored.keepTabs === 'boolean') settings.keepTabs = stored.keepTabs;
 	if (typeof stored.connectionKeys === 'boolean') settings.connectionKeys = stored.connectionKeys;
+	if (typeof stored.linkCode === 'boolean') settings.linkCode = stored.linkCode;
 }
 
 /** Makes `change`, and keeps the choices in this browser. */
