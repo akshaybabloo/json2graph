@@ -1,12 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
-/** Replaces the whole text of the editor, as a paste would. */
 /** The count of what the search of the graph or the code found. */
 function searchStatus(page: Page, of: 'graph' | 'code') {
 	return page.getByRole('search', { name: `Find in the ${of}` }).locator('[aria-live]');
 }
 
+/** Replaces the whole text of the editor, as a paste would. */
 async function replaceSource(page: Page, text: string) {
 	await page.locator('.cm-content').click();
 	await page.keyboard.press('ControlOrMeta+a');

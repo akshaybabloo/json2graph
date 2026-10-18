@@ -53,6 +53,10 @@ fn case_matters_only_when_asked() {
     let g = graph(src);
     assert_eq!(found(src, &g, "über", false), [r#""Straße": "ÜBER""#]);
     assert_eq!(found(src, &g, "straße", false).len(), 1);
+    // Shorter as written than it is in lower case.
+    let src = r#"{"İ": 1}"#;
+    let g = graph(src);
+    assert_eq!(found(src, &g, "i\u{307}", false), [r#""İ": 1"#]);
 }
 
 #[test]

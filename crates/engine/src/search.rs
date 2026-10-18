@@ -37,7 +37,9 @@ impl Needle {
     pub fn found_in(&self, raw: &[u8]) -> bool {
         let shown = shown(raw);
         let (hay, needle) = (&*shown, self.text.as_bytes());
-        if needle.is_empty() || hay.len() < needle.len() {
+        // Not by length: a shorter key or value can lower to a longer one, as `İ` does to `i̇`.
+        // A window longer than the text is none at all.
+        if needle.is_empty() {
             return false;
         }
         if self.match_case {
