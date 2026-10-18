@@ -30,7 +30,7 @@
 	import DiagramView, { type Diagram } from '#lib/components/diagram-view.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
-	import GraphSearch from '#lib/components/graph-search.svelte';
+	import SearchBar from '#lib/components/search-bar.svelte';
 	import Logo from '#lib/components/logo.svelte';
 	import PaneHandle from '#lib/components/pane-handle.svelte';
 	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
@@ -109,7 +109,7 @@
 	let controller: GraphController | undefined;
 	let diagramView = $state<DiagramView>();
 	let csvTable = $state<CsvTable>();
-	let graphSearch = $state<GraphSearch>();
+	let graphSearch = $state<SearchBar>();
 	let editor: JsonEditor | undefined;
 	/**
 	 * Whether the graph on screen was indexed from the text in the editor as
@@ -1537,13 +1537,15 @@
 
 										{#if searchOpen && !isDiagram}
 											<div class="absolute top-3 right-16 left-3 flex justify-end">
-												<GraphSearch
+												<SearchBar
 													bind:this={graphSearch}
 													bind:text={searchText}
 													bind:matchCase
+													label="Find in the graph"
+													class="w-80 max-w-full rounded-lg border bg-background/90 p-1 shadow-xs"
 													count={found.count}
 													current={found.current}
-													onsearch={(text, matchCase) => controller?.search(text, matchCase)}
+													onsearch={() => controller?.search(searchText, matchCase)}
 													onstep={(by) => controller?.step(by)}
 													onclose={closeSearch}
 												/>
