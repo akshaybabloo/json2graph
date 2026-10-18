@@ -2200,3 +2200,83 @@ test.describe('Settings', () => {
 		await expect(page.locator('.cm-content')).toHaveText('{"gone": true}');
 	});
 });
+
+test.describe('share links', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	/** Opens the share popover of the tab on screen, and gives the link it made. */
+	async function shareLink(page: Page) {
+		await page.getByRole('button', { name: 'Share' }).click();
+		return page.getByRole('textbox', { name: /^Link to the/ }).inputValue();
+	}
+
+	test('copies a link that opens the document in a new tab, as it was', async ({
+		page,
+		context
+	}) => {
+		await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+		await expect(page.getByRole('button', { name: 'Share' })).toBeDisabled();
+		const text = JSON.stringify({ name: 'Ada', langs: ['en', 'fr'], big: 1 }, null, 2);
+		const sent = text.replace('1', '12345678901234567890');
+		await openFile(page, 'people.json', sent);
+		await expect(page.getByText('2 nodes')).toBeVisible();
+
+		const link = await shareLink(page);
+		expect(link).toMatch(/\/#n=people\.json&d=[\w-]+$/);
+		await expect(page.getByText(/The link is [\d.]+\sKB\./)).toBeVisible();
+		await expect(page.getByText(/cut short/)).toBeHidden();
+		await page.getByRole('button', { name: 'Copy' }).click();
+		await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
+		expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link);
+
+		await page.goto(link);
+		const tabs = page.getByRole('tab');
+		await expect(tabs).toHaveText(['people.json', 'people.json']);
+		await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
+		await expect(page.locator('.cm-line')).toHaveText(sent.split('\n'));
+		await expect(page.getByText('2 nodes')).toBeVisible();
+		// Opened once: it is gone from the address, and a reload does not open it again.
+		await expect(page).toHaveURL(/\/$/);
+		await page.reload();
+		await expect(tabs).toHaveText(['people.json', 'people.json']);
+	});
+
+	test('keeps the type chosen for a typed document, and opens a link pasted into the page', async ({
+		page
+	}) => {
+		await replaceSource(page, '{"a": 1}');
+		await page.getByRole('button', { name: 'Type of the document: JSON' }).click();
+		await page.getByRole('menuitemradio', { name: 'YAML' }).click();
+		await expect(page.getByRole('menu')).toBeHidden();
+		const link = await shareLink(page);
+		expect(link).toMatch(/\/#t=yaml&d=/);
+		await page.keyboard.press('Escape');
+
+		// Only the hash changes, so the page is not loaded again.
+		await page.evaluate((hash) => (location.hash = hash), new URL(link).hash);
+		const tabs = page.getByRole('tab');
+		await expect(tabs).toHaveText(['Untitled', 'Untitled']);
+		await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
+		await expect(page.locator('.cm-content')).toHaveText('{"a": 1}');
+		await expect(page.getByRole('button', { name: 'Type of the document: YAML' })).toBeVisible();
+		await expect(page).toHaveURL(/\/$/);
+	});
+
+	test('warns of a long link, and says when one is cut short', async ({ page }) => {
+		// Random letters and digits, which barely compress.
+		let seed = 1;
+		const noise = Array.from({ length: 12_000 }, () => {
+			seed = (seed * 48271) % 2_147_483_647;
+			return (seed % 36).toString(36);
+		}).join('');
+		await replaceSource(page, JSON.stringify({ noise }));
+		const link = await shareLink(page);
+		await expect(page.getByText(/may be cut short when it is pasted/)).toBeVisible();
+
+		await page.goto(link.slice(0, -40));
+		await expect(page.getByRole('alert')).toHaveText(/incomplete or damaged/);
+		await expect(page).toHaveURL(/\/$/);
+	});
+});

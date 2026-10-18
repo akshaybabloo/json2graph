@@ -25,12 +25,15 @@
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
 	import { version } from '$app/env';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import CsvPlot from '#lib/components/csv-plot.svelte';
 	import CsvTable from '#lib/components/csv-table.svelte';
 	import DiagramView, { type Diagram } from '#lib/components/diagram-view.svelte';
 	import ExportMenu from '#lib/components/export-menu.svelte';
 	import GithubIcon from '#lib/components/github-icon.svelte';
 	import SearchBar from '#lib/components/search-bar.svelte';
+	import ShareMenu from '#lib/components/share-menu.svelte';
 	import Logo from '#lib/components/logo.svelte';
 	import PaneHandle from '#lib/components/pane-handle.svelte';
 	import WorkspaceTabs from '#lib/components/workspace-tabs.svelte';
@@ -68,6 +71,7 @@
 	import type { Session, StoredSession } from '#lib/session/protocol.js';
 	import { TabSaver } from '#lib/session/saver.js';
 	import { SessionStore } from '#lib/session/store.js';
+	import { readShareHash, type Shared } from '#lib/share.js';
 	import { SITE } from '#lib/site.js';
 	import {
 		changeSettings,
@@ -79,7 +83,7 @@
 	import { DROP_TEXT_OVER, newTab, tabLabel, toDiscard, type Tab } from '#lib/workspace.js';
 	import { EditorState } from '@codemirror/state';
 	import type { Pane } from 'paneforge';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 
 	/**
 	 * Larger files are shown as a graph only. The editor draws just the lines on
@@ -863,9 +867,15 @@
 
 	/**
 	 * Opens a file into the tab on screen when that has nothing in it, and
-	 * otherwise into a new tab; or, as asked, into one or the other.
+	 * otherwise into a new tab; or, as asked, into one or the other. A file
+	 * with no name is a document that was typed; its type is detected unless
+	 * one is `chosen`.
 	 */
-	async function open(file: File, into: 'blank' | 'current' | 'new' = 'blank') {
+	async function open(
+		file: File,
+		into: 'blank' | 'current' | 'new' = 'blank',
+		chosen?: DocumentType
+	) {
 		await sessionRestored;
 		const here = into === 'current' || (into === 'blank' && blank);
 		const target = here ? tab : addTab();
@@ -877,15 +887,16 @@
 		}
 		const id = (target.reading = ++opened);
 		const since = shown;
-		target.name = file.name;
+		target.name = file.name || null;
 		error = null;
-		// A new document has its type detected again, unless one is chosen while it is read.
-		target.typeChosen = false;
+		// A new document has its type detected again, unless one is chosen with it or while it is read.
+		target.typeChosen = chosen !== undefined;
 		// What the name of the file says it is, or else what it starts with.
 		const detected =
-			typeOfName(file.name) ?? detect(null, await file.slice(0, SNIFF_LENGTH).text());
+			chosen ?? typeOfName(file.name) ?? detect(null, await file.slice(0, SNIFF_LENGTH).text());
 		if (target.reading !== id || !tabs.includes(target)) return;
-		if (!target.typeChosen && target.type !== detected.id) {
+		// One chosen with it was not waited for, so it was not chosen over.
+		if ((chosen || !target.typeChosen) && target.type !== detected.id) {
 			target.type = detected.id;
 			if (target.id === activeId) editor?.setLanguage(detected.language());
 		}
@@ -913,6 +924,39 @@
 			loadGraph(target, contentBlob(text, type), { view: target.view });
 		}
 	}
+
+	/** The document on screen, as a link carries it. */
+	function sharedDocument(): Shared {
+		return { text: editor?.text ?? '', name, type: tab.typeChosen ? tab.type : null };
+	}
+
+	/**
+	 * Opens the document that the page's link carries, if it carries one, as
+	 * a file is opened, and takes it out of the address so that it is opened
+	 * once.
+	 */
+	function openShared() {
+		let shared: Shared | null;
+		try {
+			shared = readShareHash(location.hash);
+		} catch (reason) {
+			void forgetHash();
+			void sessionRestored.then(() => (error = (reason as Error).message));
+			return;
+		}
+		if (!shared) return;
+		void forgetHash();
+		const chosen = shared.type === null ? undefined : documentType(shared.type);
+		const mime = (chosen ?? detect(shared.name, shared.text)).mime;
+		open(new File([shared.text], shared.name ?? '', { type: mime }), 'blank', chosen);
+	}
+
+	/** Takes the hash out of the address, without a step back to it. The page has no other address. */
+	function forgetHash() {
+		return goto(resolve('/'), { shallow: true, replace: true });
+	}
+
+	onMount(openShared);
 
 	/** Opens the example of a type, asking first where to when the tab on screen is in use. */
 	function openExample(type: DocumentType) {
@@ -1098,6 +1142,7 @@
 	ondrop={onDrop}
 	onbeforeunload={onBeforeUnload}
 	onpagehide={flush}
+	onhashchange={openShared}
 />
 
 <svelte:document
@@ -1773,6 +1818,11 @@
 			</Tooltip.Trigger>
 			<Tooltip.Content>Empty this tab: its text and its graph</Tooltip.Content>
 		</Tooltip.Root>
+		<ShareMenu
+			disabled={empty || readingText !== null}
+			label={docType.label}
+			document={sharedDocument}
+		/>
 		<p class="ml-auto truncate text-muted-foreground" aria-live="polite">
 			{#if saveError}
 				<span class="text-destructive">Some tabs could not be kept: {saveError}</span>
