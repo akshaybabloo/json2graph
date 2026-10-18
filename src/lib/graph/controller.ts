@@ -3,6 +3,7 @@ import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent, type ZoomBehavior 
 import type {
 	EngineEvent,
 	ExportOptions,
+	FoundEvent,
 	FromWorker,
 	GraphStats,
 	LinkEvent,
@@ -46,7 +47,7 @@ export class GraphController {
 
 	constructor(
 		canvas: HTMLCanvasElement,
-		onEvent: (event: LoadEvent | EngineEvent | LinkEvent) => void
+		onEvent: (event: LoadEvent | EngineEvent | LinkEvent | FoundEvent) => void
 	) {
 		this.#canvas = canvas;
 		this.#worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -77,7 +78,7 @@ export class GraphController {
 				this.#reveal(message);
 				return;
 			}
-			if (message.type === 'engine' || message.type === 'link') {
+			if (message.type === 'engine' || message.type === 'link' || message.type === 'found') {
 				onEvent(message);
 				return;
 			}
@@ -289,6 +290,20 @@ export class GraphController {
 		this.#post({ type: 'locate', offset, reveal });
 	}
 
+	/**
+	 * Finds the rows whose key or value holds `text`, ignoring case unless
+	 * `matchCase`, in this graph and in each shown after it, and goes to the
+	 * first. No text finds nothing.
+	 */
+	search(text: string, matchCase: boolean) {
+		this.#post({ type: 'search', text, matchCase });
+	}
+
+	/** Goes to the next row found, or with -1 to the one before. */
+	step(by: 1 | -1) {
+		this.#post({ type: 'step', by });
+	}
+
 	/** Collapses every box into its row, leaving the root, or shows every box again. */
 	collapseAll(collapsed: boolean) {
 		this.#post({ type: 'collapse', collapsed });
@@ -346,11 +361,26 @@ export class GraphController {
 	}
 
 	/**
-	 * Moves the view, at the same scale, to show a rectangle of the world:
-	 * centred, or from its top or left edge when it is too large for that.
+	 * Moves the view to show a rectangle of the world: centred, or from its
+	 * top or left edge when it is too large for that. The scale stays, unless
+	 * with `zoom` it is too small to read at, when the rectangle is shown at
+	 * full size.
 	 */
-	#reveal({ x, y, width, height }: { x: number; y: number; width: number; height: number }) {
-		const { k } = zoomTransform(this.#canvas);
+	#reveal({
+		x,
+		y,
+		width,
+		height,
+		zoom
+	}: {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		zoom: boolean;
+	}) {
+		const scale = zoomTransform(this.#canvas).k;
+		const k = zoom && scale < READABLE_SCALE ? 1 : scale;
 		const { clientWidth, clientHeight } = this.#canvas;
 		const along = (start: number, size: number, room: number) =>
 			size * k <= room - 2 * MARGIN ? room / 2 - (start + size / 2) * k : MARGIN - start * k;

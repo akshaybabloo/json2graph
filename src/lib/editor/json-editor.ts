@@ -14,7 +14,7 @@ import {
 	indentOnInput,
 	syntaxHighlighting
 } from '@codemirror/language';
-import { searchKeymap } from '@codemirror/search';
+import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
 import {
 	crosshairCursor,
@@ -26,15 +26,52 @@ import {
 	highlightSpecialChars,
 	keymap,
 	lineNumbers,
+	type Panel,
 	placeholder,
 	rectangularSelection
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { flushSync, mount, unmount } from 'svelte';
+import EditorSearch from '../components/editor-search.svelte';
 import { MONO_FONT } from '../fonts';
 import { indentGuides } from './indent-guides';
 
 /** How long typing must pause before an edit is reported. */
 const EDIT_DELAY = 300;
+
+/** The search bar open in each editor. */
+const searchBars = new WeakMap<EditorView, ReturnType<typeof mountSearch>>();
+
+function mountSearch(view: EditorView, target: HTMLElement) {
+	const bar = mount(EditorSearch, { target, props: { view } });
+	// So that it can be focused, or its replacement shown, before the page updates.
+	flushSync();
+	return bar;
+}
+
+/** CodeMirror's search panel, as the bar that searches the graph too, at the top of the editor. */
+function searchPanel(view: EditorView): Panel {
+	const dom = document.createElement('div');
+	const bar = mountSearch(view, dom);
+	searchBars.set(view, bar);
+	return {
+		dom,
+		top: true,
+		mount: () => bar.focus(),
+		update: (update) => bar.update(update),
+		destroy: () => {
+			if (searchBars.get(view) === bar) searchBars.delete(view);
+			void unmount(bar);
+		}
+	};
+}
+
+/** Opens the search with the box of the replacement shown. */
+function openReplace(view: EditorView) {
+	openSearchPanel(view);
+	searchBars.get(view)?.showReplace();
+	return true;
+}
 
 /**
  * CodeMirror's basic setup, less the highlight of every other copy of the
@@ -57,7 +94,9 @@ const setup: Extension = [
 	rectangularSelection(),
 	crosshairCursor(),
 	highlightActiveLine(),
+	search({ top: true, createPanel: searchPanel }),
 	keymap.of([
+		{ key: 'Mod-Shift-f', run: openReplace, preventDefault: true },
 		...closeBracketsKeymap,
 		...defaultKeymap,
 		...searchKeymap,
@@ -109,6 +148,11 @@ const theme = EditorView.theme({
 		backgroundColor: 'var(--card)',
 		borderColor: 'var(--border)'
 	},
+	// As the graph marks what its search found.
+	'.cm-searchMatch': {
+		backgroundColor: 'color-mix(in oklch, var(--graph-found) 30%, transparent)'
+	},
+	'.cm-searchMatch-selected': { outline: '1px solid var(--graph-found)' },
 	'.cm-tooltip': {
 		color: 'var(--popover-foreground)',
 		backgroundColor: 'var(--popover)',

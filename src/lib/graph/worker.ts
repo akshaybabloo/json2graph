@@ -59,6 +59,9 @@ const EXPORT_MARGIN = 24;
 const FOCUS_VEIL = 0.75;
 /** How strongly the linked row is tinted. */
 const LINK_TINT = 0.14;
+/** How strongly the rows a search found are tinted, and the one gone to. */
+const FOUND_TINT = 0.3;
+const CURRENT_TINT = 0.2;
 /** How much of the start of the linked row must be on screen for it to count as shown, in pixels. */
 const REVEAL_START = 48;
 /**
@@ -83,6 +86,7 @@ const ROW_CONTINUED = 1 << 17;
 const ROW_MORE = 1 << 18;
 const ROW_FIRST = 1 << 19;
 const ROW_COLLAPSED = 1 << 20;
+const ROW_FOUND = 1 << 21;
 
 let memory: WebAssembly.Memory;
 const engine = init().then((wasm) => {
@@ -133,6 +137,13 @@ let linkCode = true;
  * `[box, row]` with the row `NONE` for a whole box; it is marked on screen.
  */
 let linked: [number, number] | null = null;
+/** What is searched for in the graph, if anything: see the `search` message. */
+let search: { text: string; matchCase: boolean } | null = null;
+/** How many rows the search found in the document on screen. */
+let foundCount = 0;
+/** Which of them was gone to, by its place among them and as `[box, row]`; -1 and none for none. */
+let current = -1;
+let currentPlace: [number, number] | null = null;
 
 const decoder = new TextDecoder();
 /** Decoded keys and values of recently drawn rows, by byte offset. */
@@ -214,6 +225,16 @@ addEventListener('message', (event: MessageEvent<ToWorker>) => {
 		case 'locate':
 			locate(message.offset, message.reveal);
 			break;
+		case 'search':
+			search = message.text ? { text: message.text, matchCase: message.matchCase } : null;
+			find();
+			if (foundCount > 0) goTo(0);
+			break;
+		case 'step':
+			if (foundCount === 0) break;
+			if (current < 0) goTo(message.by > 0 ? 0 : foundCount - 1);
+			else goTo((current + message.by + foundCount) % foundCount);
+			break;
 		case 'export':
 			exportImage(message.id, message.options);
 			break;
@@ -280,8 +301,16 @@ function locate(offset: number | null, reveal: boolean) {
 	linked = place.length === 2 ? [place[0], place[1]] : null;
 	requestDraw();
 	const shown = shownLinked();
-	if (!doc || !shown || !reveal) return;
-	const [x, y, width, height] = doc.place_rect(shown[0], shown[1]);
+	if (shown && reveal) bringOnScreen(shown, false);
+}
+
+/**
+ * Moves the view to a row, or a whole box, when it is not on screen; with
+ * `zoom`, also when the view is too small to read it in.
+ */
+function bringOnScreen([box, row]: [number, number], zoom: boolean) {
+	if (!doc) return;
+	const [x, y, width, height] = doc.place_rect(box, row);
 	const left = x * view.k + view.x;
 	const top = y * view.k + view.y;
 	// Its start must be on screen, and all of its height.
@@ -290,7 +319,36 @@ function locate(offset: number | null, reveal: boolean) {
 		left <= size.width - REVEAL_START &&
 		top >= 0 &&
 		top + height * view.k <= size.height;
-	if (!onScreen) post({ type: 'reveal', x, y, width, height });
+	if (!onScreen || (zoom && !textVisible())) post({ type: 'reveal', x, y, width, height, zoom });
+}
+
+/** Searches the document on screen for what is searched for, which goes to none of the rows found yet. */
+function find() {
+	current = -1;
+	currentPlace = null;
+	foundCount = doc ? doc.search(search?.text ?? '', search?.matchCase ?? false) : 0;
+	post({ type: 'found', count: foundCount, current });
+	requestDraw();
+}
+
+/**
+ * Goes to row `i` of those found: opens the boxes it is collapsed in, brings
+ * it on screen and, while the graph and the code are linked, selects it there.
+ */
+function goTo(i: number) {
+	if (!doc) return;
+	const [box, row] = doc.found(i);
+	current = i;
+	currentPlace = [box, row];
+	post({ type: 'found', count: foundCount, current });
+	if (doc.expand_to(box)) relaid(false);
+	const range = linkCode ? doc.source_range(box, row) : [];
+	if (range.length === 2) {
+		linked = currentPlace;
+		post({ type: 'link', range: { start: range[0], end: range[1] } });
+	}
+	bringOnScreen(currentPlace, true);
+	requestDraw();
 }
 
 /** The row or box on screen that shows the linked one, which may be inside a collapsed box. */
@@ -537,12 +595,14 @@ function statsOf({ doc, bytes, ms }: Kept): GraphStats {
 
 /** Puts a document on screen. Documents are freed by `drop`, not here. */
 function show(next: Document | null) {
+	// What it found is not needed while it is not on screen.
+	if (doc && doc !== next) doc.search('', false);
 	doc = next;
 	linked = null;
 	sourcePtr = next ? next.source_ptr() : 0;
 	strings.clear();
 	hovering = false;
-	requestDraw();
+	find();
 }
 
 /** Selects the font at the given size and returns the advance width of one character. */
@@ -561,7 +621,9 @@ function draw() {
 		background: theme.background,
 		grid: true,
 		focus,
-		linked: shownLinked()
+		linked: shownLinked(),
+		found: true,
+		current: shownCurrent()
 	});
 	// The path in focus is animated, so it needs a frame after this one.
 	if (focus !== NONE && motion) requestDraw();
@@ -576,6 +638,16 @@ interface Scene {
 	focus: number;
 	/** The row, or box, that is marked, as `[box, row]`: see `linked`. */
 	linked: [number, number] | null;
+	/** Whether the rows a search found are marked, and the one gone to, as `[box, row]`. */
+	found: boolean;
+	current: [number, number] | null;
+}
+
+/** The row on screen that shows the row found that was gone to, which may since have been collapsed. */
+function shownCurrent(): [number, number] | null {
+	if (!doc || !currentPlace) return null;
+	const [box, row] = doc.shown(currentPlace[0], currentPlace[1]);
+	return [box, row];
 }
 
 /**
@@ -599,7 +671,9 @@ async function exportImage(id: number, options: ExportOptions) {
 		background: options.background ?? theme.background,
 		grid: options.grid,
 		focus: NONE,
-		linked: null
+		linked: null,
+		found: false,
+		current: null
 	};
 	if (whole) {
 		const offset = EXPORT_MARGIN * scale;
@@ -630,7 +704,7 @@ function render(
 	const k = view.k;
 	const text = FONT_SIZE * k >= MIN_TEXT_PX;
 	doc.query(view.x, view.y, k, width, height, text);
-	drawFrame(ctx, k, text, false, scene.background);
+	drawFrame(ctx, k, text, false, scene.background, scene.found);
 	if (scene.focus !== NONE) {
 		// The graph fades behind a veil of the background, and the path to the
 		// box in focus is drawn again over it.
@@ -639,16 +713,22 @@ function render(
 		ctx.fillRect(0, 0, width, height);
 		ctx.globalAlpha = 1;
 		doc.query_path(scene.focus, view.x, view.y, k, width, height, text);
-		drawFrame(ctx, k, text, true, scene.background);
+		drawFrame(ctx, k, text, true, scene.background, scene.found);
 	}
-	if (scene.linked) drawLink(ctx, view, scene.linked);
+	const { linked, current } = scene;
+	// The row gone to is often the one linked too, which it is marked over.
+	const same = linked && current && linked[0] === current[0] && linked[1] === current[1];
+	if (linked && !same) drawMark(ctx, view, linked, theme.link, LINK_TINT);
+	if (current) drawMark(ctx, view, current, theme.found, CURRENT_TINT);
 }
 
-/** Marks a row, or a whole box, with a tint and an outline. */
-function drawLink(
+/** Marks a row, or a whole box, with a tint and an outline in `colour`. */
+function drawMark(
 	ctx: OffscreenCanvasRenderingContext2D,
 	view: { x: number; y: number; k: number },
-	[box, row]: [number, number]
+	[box, row]: [number, number],
+	colour: string,
+	tint: number
 ) {
 	if (!doc) return;
 	const [x, y, w, h] = doc.place_rect(box, row);
@@ -656,11 +736,11 @@ function drawLink(
 	const radius = Math.min((row === NONE ? RADIUS : RADIUS / 2) * k, (h * k) / 2);
 	ctx.beginPath();
 	ctx.roundRect(x * k + view.x, y * k + view.y, w * k, h * k, radius);
-	ctx.fillStyle = theme.link;
-	ctx.globalAlpha = LINK_TINT;
+	ctx.fillStyle = colour;
+	ctx.globalAlpha = tint;
 	ctx.fill();
 	ctx.globalAlpha = 1;
-	ctx.strokeStyle = theme.link;
+	ctx.strokeStyle = colour;
 	ctx.lineWidth = Math.min(Math.max(k * 1.5, 1), 2);
 	ctx.stroke();
 }
@@ -668,14 +748,15 @@ function drawLink(
 /**
  * Draws what the last query of the engine found, at scale `k`, over
  * `background`. With `strong` its edges and outlines are darker, for the path
- * that stands out.
+ * that stands out, and with `found` the rows a search found are tinted.
  */
 function drawFrame(
 	ctx: OffscreenCanvasRenderingContext2D,
 	k: number,
 	text: boolean,
 	strong: boolean,
-	background: string
+	background: string,
+	found: boolean
 ) {
 	if (!doc) return;
 	// Views are created after the query: when WebAssembly memory grows, views
@@ -749,7 +830,7 @@ function drawFrame(
 		ctx.strokeStyle = strong ? theme.edge : theme.border;
 		ctx.lineWidth = Math.min(Math.max(k, 0.5), 1.5);
 		ctx.stroke();
-		drawRows(ctx, buffer, FONT_SIZE * k);
+		drawRows(ctx, buffer, FONT_SIZE * k, found);
 	} else {
 		// Too small to read: a faint outline would disappear, so boxes become
 		// solid blocks that show the shape of the graph.
@@ -849,7 +930,12 @@ function drawEdgeKeys(
 	ctx.textAlign = 'start';
 }
 
-function drawRows(ctx: OffscreenCanvasRenderingContext2D, buffer: ArrayBuffer, fontPx: number) {
+function drawRows(
+	ctx: OffscreenCanvasRenderingContext2D,
+	buffer: ArrayBuffer,
+	fontPx: number,
+	found: boolean
+) {
 	const length = doc!.rows_len();
 	const words = new Uint32Array(buffer, doc!.rows_ptr(), length);
 	const floats = new Float32Array(buffer, doc!.rows_ptr(), length);
@@ -872,6 +958,20 @@ function drawRows(ctx: OffscreenCanvasRenderingContext2D, buffer: ArrayBuffer, f
 	ctx.strokeStyle = theme.border;
 	ctx.lineWidth = Math.min(Math.max(k, 0.5), 1);
 	ctx.stroke();
+
+	if (found) {
+		ctx.beginPath();
+		for (let i = 0; i < length; i += ROW_WORDS) {
+			if (!(words[i + 3] & ROW_FOUND)) continue;
+			const left = floats[i] - pad;
+			const width = floats[i + 2] + pad - left;
+			ctx.roundRect(left, floats[i + 1] - half, width, 2 * half, (RADIUS / 2) * k);
+		}
+		ctx.fillStyle = theme.found;
+		ctx.globalAlpha = FOUND_TINT;
+		ctx.fill();
+		ctx.globalAlpha = 1;
+	}
 
 	const charW = charWidth(ctx, fontPx);
 	ctx.textBaseline = 'middle';

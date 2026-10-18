@@ -1,6 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
+/** The count of what the search of the graph or the code found. */
+function searchStatus(page: Page, of: 'graph' | 'code') {
+	return page.getByRole('search', { name: `Find in the ${of}` }).locator('[aria-live]');
+}
+
 /** Replaces the whole text of the editor, as a paste would. */
 async function replaceSource(page: Page, text: string) {
 	await page.locator('.cm-content').click();
@@ -1603,6 +1608,7 @@ test.describe('with the example open', () => {
 			/Zoom in/,
 			/Zoom out/,
 			/Fit to view/,
+			/Find in the graph/,
 			'Collapse all nodes',
 			'Export as image…'
 		]);
@@ -1613,6 +1619,11 @@ test.describe('with the example open', () => {
 		await expect(menu.getByRole('menuitem', { name: 'Expand all nodes' })).toBeVisible();
 		await menu.getByRole('menuitem', { name: 'Export as image…' }).click();
 		await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeVisible();
+		await page.keyboard.press('Escape');
+
+		await canvas.click({ button: 'right' });
+		await menu.getByRole('menuitem', { name: /Find in the graph/ }).click();
+		await expect(page.getByRole('textbox', { name: 'Find in the graph' })).toBeFocused();
 	});
 
 	test('zooms from the toolbar and exports the graph as a PNG', async ({ page }) => {
@@ -1854,6 +1865,201 @@ test.describe('linking the graph and the code', () => {
 		expect(await selected(page)).toBe('');
 		await cursorAt(page, DOC.indexOf('36'));
 		expect(await markedPixels(page)).toBeLessThan(5);
+	});
+});
+
+test.describe('finding text in the graph', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	const DOC = '{"name": "Ada", "langs": ["en", "fr"], "nested": {"Name": "Grace", "x": "banana"}}';
+
+	/** How many pixels of the canvas are near `rgb`, give or take 12 in each channel. */
+	async function pixelsNear(page: Page, rgb: [number, number, number]) {
+		const png = (await page.locator('canvas').screenshot()).toString('base64');
+		return page.evaluate(
+			async ([png, rgb]) => {
+				const image = await createImageBitmap(
+					await (await fetch(`data:image/png;base64,${png}`)).blob()
+				);
+				const context = new OffscreenCanvas(image.width, image.height).getContext('2d')!;
+				context.drawImage(image, 0, 0);
+				const data = context.getImageData(0, 0, image.width, image.height).data;
+				let count = 0;
+				for (let i = 0; i < data.length; i += 4) {
+					const near = [0, 1, 2].every((c) => Math.abs(data[i + c] - rgb[c]) < 12);
+					if (near) count++;
+				}
+				return count;
+			},
+			[png, rgb] as const
+		);
+	}
+
+	/** --graph-found in the light theme, #eab308, which outlines the row gone to. */
+	const FOUND: [number, number, number] = [0xea, 0xb3, 0x08];
+
+	test('finds keys and values, and goes through them with Enter and Shift+Enter', async ({
+		page
+	}) => {
+		await replaceSource(page, DOC);
+		await expect(page.getByText('3 nodes')).toBeVisible();
+		await page.locator('canvas').focus();
+		await page.keyboard.press('ControlOrMeta+f');
+		const find = page.getByRole('textbox', { name: 'Find in the graph' });
+		await expect(find).toBeFocused();
+		const status = searchStatus(page, 'graph');
+
+		// Two keys and a value, whatever their case, the first gone to.
+		await find.fill('na');
+		await expect(status).toHaveText('1 of 3');
+		await expect.poll(() => pixelsNear(page, FOUND)).toBeGreaterThan(20);
+		await page.keyboard.press('Enter');
+		await expect(status).toHaveText('2 of 3');
+		await page.keyboard.press('Enter');
+		await expect(status).toHaveText('3 of 3');
+		await page.keyboard.press('Enter');
+		await expect(status).toHaveText('1 of 3');
+		await page.keyboard.press('Shift+Enter');
+		await expect(status).toHaveText('3 of 3');
+		await page.getByRole('button', { name: 'Previous match' }).click();
+		await expect(status).toHaveText('2 of 3');
+
+		// The case matters once asked to: not the key `Name`.
+		await page.getByRole('checkbox', { name: 'Match case' }).click();
+		await expect(status).toHaveText('1 of 2');
+		await find.fill('nope');
+		await expect(status).toHaveText('No results');
+		await expect(page.getByRole('button', { name: 'Next match' })).toBeDisabled();
+		await expect.poll(() => pixelsNear(page, FOUND)).toBeLessThan(5);
+	});
+
+	test('selects in the code the row it goes to', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await expect(page.getByText('3 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Find in the graph' }).click();
+		await page.getByRole('textbox', { name: 'Find in the graph' }).fill('banana');
+		await expect(searchStatus(page, 'graph')).toHaveText('1 of 1');
+		await page.locator('.cm-content').focus();
+		await expect.poll(() => page.evaluate(() => getSelection()?.toString() ?? '')).toBe('"banana"');
+	});
+
+	test('opens the nodes a row it finds is collapsed in', async ({ page }) => {
+		await replaceSource(page, '{"a": 1, "nested": {"deep": {"name": "Grace"}}}');
+		await expect(page.getByText('3 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Collapse all nodes' }).click();
+		const collapsed = await graphShot(page);
+
+		await page.locator('canvas').focus();
+		await page.keyboard.press('ControlOrMeta+f');
+		await page.getByRole('textbox', { name: 'Find in the graph' }).fill('grace');
+		await expect(searchStatus(page, 'graph')).toHaveText('1 of 1');
+		await page.keyboard.press('Escape');
+		await expect(page.getByRole('search')).toBeHidden();
+		await expect(page.locator('canvas')).toBeFocused();
+		// Away from the nodes, which marks nothing.
+		const box = (await page.locator('canvas').boundingBox())!;
+		await page.mouse.click(box.x + 10, box.y + 10);
+		// All of it, as it is shown once every node is, without the outline of the focus.
+		await page.keyboard.press('0');
+		await page.locator('canvas').blur();
+		const found = await graphShot(page);
+		expect(found.equals(collapsed)).toBe(false);
+
+		// The nodes of `nested` and `deep` are shown, which are all there are.
+		await page.getByRole('button', { name: 'Expand all nodes' }).click();
+		expect((await graphShot(page)).equals(found)).toBe(true);
+	});
+
+	test('marks nothing once closed, and finds the same again when opened', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await expect(page.getByText('3 nodes')).toBeVisible();
+		await page.getByRole('button', { name: 'Find in the graph' }).click();
+		await page.getByRole('textbox', { name: 'Find in the graph' }).fill('ada');
+		await expect.poll(() => pixelsNear(page, FOUND)).toBeGreaterThan(20);
+		await page.getByRole('button', { name: 'Close the search' }).click();
+		await expect.poll(() => pixelsNear(page, FOUND)).toBeLessThan(5);
+
+		await page.getByRole('button', { name: 'Find in the graph' }).click();
+		await expect(page.getByRole('textbox', { name: 'Find in the graph' })).toHaveValue('ada');
+		await expect(searchStatus(page, 'graph')).toHaveText('1 of 1');
+		await expect.poll(() => pixelsNear(page, FOUND)).toBeGreaterThan(20);
+
+		// Again in the new graph of an edit, which it has not gone to a row of.
+		await replaceSource(page, '{"a": "Ada", "b": "ada", "c": "x"}');
+		await expect(searchStatus(page, 'graph')).toHaveText('2 found');
+	});
+});
+
+test.describe('finding text in the code', () => {
+	test.beforeEach(async ({ page }) => {
+		await expect(page.getByRole('status')).toBeHidden();
+	});
+
+	const DOC = '{"name": "Ada", "nick": "ada", "names": ["Adam"]}';
+
+	test('counts what it finds, goes through it, and closes back to the code', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await page.keyboard.press('ControlOrMeta+f');
+		const bar = page.getByRole('search', { name: 'Find in the code' });
+		const find = bar.getByRole('textbox', { name: 'Find in the code' });
+		await expect(find).toBeFocused();
+		const status = searchStatus(page, 'code');
+
+		// From the cursor at the end, round to the first.
+		await find.fill('ada');
+		await expect(status).toHaveText('1 of 3');
+		await page.keyboard.press('Enter');
+		await expect(status).toHaveText('2 of 3');
+		await page.keyboard.press('Shift+Enter');
+		await expect(status).toHaveText('1 of 3');
+
+		await bar.getByRole('checkbox', { name: 'Match case' }).click();
+		await expect(status).toHaveText('1 of 1');
+		await find.press('Alt+c');
+		// It stays on the one the cursor is on, which is still found: not `Adam`.
+		await bar.getByRole('checkbox', { name: 'Whole word' }).click();
+		await expect(status).toHaveText('2 of 2');
+		await bar.getByRole('checkbox', { name: 'Whole word' }).click();
+		await bar.getByRole('checkbox', { name: 'Regular expression' }).click();
+		await find.fill('A\\w+m');
+		await expect(status).toHaveText('1 of 1');
+		await find.fill('(');
+		await expect(status).toHaveText('Invalid pattern');
+		await expect(find).toHaveAttribute('aria-invalid', 'true');
+
+		await find.fill('nick');
+		await expect(status).toHaveText('1 of 1');
+		await page.keyboard.press('Escape');
+		await expect(bar).toBeHidden();
+		await expect(page.locator('.cm-content')).toBeFocused();
+		await expect.poll(() => page.evaluate(() => getSelection()?.toString() ?? '')).toBe('nick');
+	});
+
+	test('replaces one or all of what it finds', async ({ page }) => {
+		await replaceSource(page, DOC);
+		await page.keyboard.press('ControlOrMeta+Shift+F');
+		const bar = page.getByRole('search', { name: 'Find in the code' });
+		const replace = bar.getByRole('textbox', { name: 'Replace with' });
+		await expect(replace).toBeFocused();
+		await bar.getByRole('textbox', { name: 'Find in the code' }).fill('ada');
+		await expect(searchStatus(page, 'code')).toHaveText('1 of 3');
+		await replace.fill('Bo');
+		await replace.press('Enter');
+		await expect(page.locator('.cm-content')).toHaveText(
+			'{"name": "Bo", "nick": "ada", "names": ["Adam"]}'
+		);
+		await expect(searchStatus(page, 'code')).toHaveText('1 of 2');
+
+		await bar.getByRole('button', { name: 'Replace all' }).click();
+		await expect(page.locator('.cm-content')).toHaveText(
+			'{"name": "Bo", "nick": "Bo", "names": ["Bom"]}'
+		);
+		await expect(searchStatus(page, 'code')).toHaveText('No results');
+
+		await bar.getByRole('button', { name: 'Toggle replace' }).click();
+		await expect(replace).toBeHidden();
 	});
 });
 

@@ -95,6 +95,9 @@ pub struct Graph {
     /// Where the containers are in the source, sorted by value. Empty when
     /// the graph was built without them.
     spans: Vec<Span>,
+    /// One bit per value, set for those in the rows a search found. Empty
+    /// while nothing is found.
+    found: Vec<u64>,
 }
 
 /// A box, and one of its rows or the box as a whole.
@@ -141,6 +144,7 @@ impl Graph {
             expanded: Vec::new(),
             collapsed: Vec::new(),
             spans,
+            found: Vec::new(),
         };
         let mut i = 0;
         while i < boxes.len() {
@@ -410,6 +414,43 @@ impl Graph {
             self.collapsed[0] &= !1;
         }
         self.place(m);
+    }
+
+    /// Shows box `id` and every box it is inside that is collapsed, and
+    /// repositions the boxes. Returns whether any was collapsed.
+    pub fn expand_to(&mut self, m: &Metrics, mut id: u32) -> bool {
+        let mut changed = false;
+        while id != NONE {
+            if self.is_collapsed(id) {
+                self.collapsed[id as usize / 64] ^= 1 << (id % 64);
+                changed = true;
+            }
+            id = self.boxes[id as usize].parent;
+        }
+        if changed {
+            self.place(m);
+        }
+        changed
+    }
+
+    /// Marks `places` as the rows a search found, in place of those before.
+    pub fn set_found(&mut self, places: &[Place]) {
+        self.found.clear();
+        if places.is_empty() {
+            return;
+        }
+        self.found.resize(self.values.len().div_ceil(64), 0);
+        for &(id, row) in places {
+            let Some(row) = row else { continue };
+            let index = self.boxes[id as usize].first + row;
+            self.found[index as usize / 64] |= 1 << (index % 64);
+        }
+    }
+
+    /// Whether value `index` is in a row a search found.
+    pub fn is_found(&self, index: u32) -> bool {
+        let word = self.found.get(index as usize / 64);
+        word.is_some_and(|word| word >> (index % 64) & 1 == 1)
     }
 
     /// Where value `index` is in the source: the token of a primitive, the
