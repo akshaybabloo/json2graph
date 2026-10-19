@@ -45,13 +45,19 @@
 
 	function make() {
 		copied = null;
+		link = null;
 		const doc = shared();
 		if (doc.text.length > SHARE_TEXT_MAX) {
 			link = { length: null };
 			return;
 		}
-		const url = `${location.origin}${location.pathname}${shareHash(doc)}`;
-		link = url.length > SHARE_MAX ? { length: url.length } : { url };
+		try {
+			const url = `${location.origin}${location.pathname}${shareHash(doc)}`;
+			link = url.length > SHARE_MAX ? { length: url.length } : { url };
+		} catch {
+			// Out of memory to compress it in, it is too large all the same.
+			link = { length: null };
+		}
 	}
 
 	async function copy() {

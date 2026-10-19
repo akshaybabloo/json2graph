@@ -2264,6 +2264,28 @@ test.describe('share links', () => {
 		await expect(page).toHaveURL(/\/$/);
 	});
 
+	test('opens links pasted one straight after another each in a tab of its own', async ({
+		page
+	}) => {
+		const hashes = [];
+		for (const text of ['{"first": 1}', '{"second": 2}']) {
+			await replaceSource(page, text);
+			hashes.push(new URL(await shareLink(page)).hash);
+			await page.keyboard.press('Escape');
+		}
+		await page.getByRole('button', { name: 'Clear' }).click();
+		await page.evaluate(async ([a, b]) => {
+			location.hash = a;
+			await new Promise((resolve) => setTimeout(resolve));
+			location.hash = b;
+		}, hashes);
+		const tabs = page.getByRole('tab');
+		await expect(tabs).toHaveCount(2);
+		await expect(page.locator('.cm-content')).toHaveText('{"second": 2}');
+		await tabs.first().click();
+		await expect(page.locator('.cm-content')).toHaveText('{"first": 1}');
+	});
+
 	test('warns of a long link, and says when one is cut short', async ({ page }) => {
 		// Random letters and digits, which barely compress.
 		let seed = 1;
