@@ -930,30 +930,43 @@
 		return { text: editor?.text ?? '', name, type: tab.typeChosen ? tab.type : null };
 	}
 
+	/** Settles once the documents of the links opened so far are open, each in turn. */
+	let sharedOpened: Promise<void> = Promise.resolve();
+
 	/**
 	 * Opens the document that the page's link carries, if it carries one, as
 	 * a file is opened, and takes it out of the address so that it is opened
-	 * once.
+	 * once. Each waits for the one before, which would otherwise find the
+	 * same tab empty and take it.
 	 */
 	function openShared() {
 		let shared: Shared | null;
 		try {
 			shared = readShareHash(location.hash);
 		} catch (reason) {
-			void forgetHash();
+			forgetHash();
 			void sessionRestored.then(() => (error = (reason as Error).message));
 			return;
 		}
 		if (!shared) return;
-		void forgetHash();
+		forgetHash();
 		const chosen = shared.type === null ? undefined : documentType(shared.type);
 		const mime = (chosen ?? detect(shared.name, shared.text)).mime;
-		open(new File([shared.text], shared.name ?? '', { type: mime }), 'blank', chosen);
+		const file = new File([shared.text], shared.name ?? '', { type: mime });
+		sharedOpened = sharedOpened
+			.then(() => open(file, 'blank', chosen))
+			.catch((reason: Error) => {
+				error = `Cannot open the link: ${reason.message}`;
+			});
 	}
 
-	/** Takes the hash out of the address, without a step back to it. The page has no other address. */
+	/**
+	 * Takes the hash out of the address, without a step back to it. The page
+	 * has no other address. Left in, it only opens the document again on a
+	 * reload.
+	 */
 	function forgetHash() {
-		return goto(resolve('/'), { shallow: true, replace: true });
+		goto(resolve('/'), { shallow: true, replace: true }).catch(() => {});
 	}
 
 	onMount(openShared);
