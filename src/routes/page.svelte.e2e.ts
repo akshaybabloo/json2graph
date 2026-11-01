@@ -1739,6 +1739,26 @@ test.describe('linking the graph and the code', () => {
 		return page.evaluate(() => getSelection()?.toString() ?? '');
 	}
 
+	/**
+	 * Clicks the graph where that changes the selection of the editor, and waits
+	 * until it has. The worker answers a click later, and focusing the editor
+	 * before then, as `selected` does, loses the selection it answers with.
+	 */
+	async function clickToSelect(page: Page, x: number, y: number) {
+		const drawn = () =>
+			page.evaluate(() =>
+				JSON.stringify(
+					[...document.querySelectorAll('.cm-selectionBackground')].map((part) => {
+						const { x, y, width, height } = part.getBoundingClientRect();
+						return [x, y, width, height];
+					})
+				)
+			);
+		const before = await drawn();
+		await page.mouse.click(x, y);
+		await expect.poll(drawn).not.toBe(before);
+	}
+
 	/** The middle of row `row` of a graph of one box, which is centred on the canvas. */
 	async function rowOfOneBox(page: Page, row: number, rows: number) {
 		const box = (await page.locator('canvas').boundingBox())!;
@@ -1786,28 +1806,28 @@ test.describe('linking the graph and the code', () => {
 		await expect(page.getByText('2 nodes')).toBeVisible();
 		await page.getByRole('button', { name: 'Collapse all nodes' }).click();
 		const age = await rowOfOneBox(page, 2, 3);
-		await page.mouse.click(age.x, age.y);
+		await clickToSelect(page, age.x, age.y);
 		await expect.poll(() => selected(page)).toBe('36');
 
 		const name = await rowOfOneBox(page, 0, 3);
-		await page.mouse.click(name.x, name.y);
+		await clickToSelect(page, name.x, name.y);
 		await expect.poll(() => selected(page)).toBe('"Ada ✓"');
 
 		// A row holding an array: all of the array.
 		const langs = await rowOfOneBox(page, 1, 3);
-		await page.mouse.click(langs.x, langs.y);
+		await clickToSelect(page, langs.x, langs.y);
 		await expect.poll(() => selected(page)).toBe('["en", "fr"]');
 
 		// Just above its top edge: the node, brackets and all.
 		const top = await rowOfOneBox(page, 0, 3);
 		await page.mouse.move(top.x, top.y - 14);
 		await expect(page.locator('canvas')).toHaveCSS('cursor', 'pointer');
-		await page.mouse.click(top.x, top.y - 14);
+		await clickToSelect(page, top.x, top.y - 14);
 		await expect.poll(() => selected(page)).toBe(doc);
 
 		// Away from the nodes: nothing is selected, or marked.
 		const box = (await page.locator('canvas').boundingBox())!;
-		await page.mouse.click(box.x + 40, box.y + 40);
+		await clickToSelect(page, box.x + 40, box.y + 40);
 		await expect.poll(() => selected(page)).toBe('');
 		await expect.poll(() => markedPixels(page)).toBeLessThan(5);
 	});
