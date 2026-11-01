@@ -225,7 +225,7 @@ importers:
         version: 12.2.0
       pako:
         specifier: ^3.0.2
-        version: 3.0.2
+        version: 3.0.3
       paneforge:
         specifier: ^1.0.2
         version: 1.0.2(svelte@5.57.2(@typescript-eslint/types@8.71.2))
@@ -2712,8 +2712,8 @@ packages:
   package-manager-detector@1.9.0:
     resolution: {integrity: sha512-zAMfbta9nPA8AKkA4WdmNAT8R8s6Dk0/xwPsqNnRidMFcLo1YkLuPDTgs2f64XdzS8vbLNnoJ+uUIkgbz7oRHA==}
 
-  pako@3.0.2:
-    resolution: {integrity: sha512-uBv6IT2aT1A78iU6dpNEbf6+CyhlV/6g9JlJs9kpgjFGFhruIICVRysF/W0SLzXg5+hCl+KroH7e4YUyfEmgLg==}
+  pako@3.0.3:
+    resolution: {integrity: sha512-tmrebBBYI5FOw8QICGwJNqE8fotC8R+gwcxOvoFNv+GKehOI6Lc6YBolNcQNnC4v96l1wt7rh102ifD4kVeZAQ==}
 
   paneforge@1.0.2:
     resolution: {integrity: sha512-KzmIXQH1wCfwZ4RsMohD/IUtEjVhteR+c+ulb/CHYJHX8SuDXoJmChtsc/Xs5Wl8NHS4L5Q7cxL8MG40gSU1bA==}
@@ -5829,7 +5829,7 @@ snapshots:
 
   package-manager-detector@1.9.0: {}
 
-  pako@3.0.2: {}
+  pako@3.0.3: {}
 
   paneforge@1.0.2(svelte@5.57.2(@typescript-eslint/types@8.71.2)):
     dependencies:
